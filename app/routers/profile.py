@@ -2,10 +2,9 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
-@router.delete("/profile", status_code=204)
+@router.delete("/profile")
 def delete_profile():
-    return None
-
-@router.get("/profile")
-def get_profile():
-    return {"status": "ok profile"}
+    """
+    Este endpoint borra todo el perfil creado
+    """
+    return {"status": "ok DELETE cv"}

@@ -4,8 +4,8 @@ router = APIRouter()
 
 @router.post("/match")
 def match():
-    return {"score": 0, "requirements": []}
+    return {"status": "ok POST match"}
 
 @router.get("/match")
 def match():
-    return {"status": "ok match"}
+    return {"status": "ok GET match"}
