@@ -2,7 +2,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.routers import match, profile
+from app.routers import cv, match, profile
 
 app = FastAPI(title="CV Matcher")
 
@@ -10,9 +10,9 @@ app = FastAPI(title="CV Matcher")
 def health():
     return {"status": "ok"}
 
-app.include_router(profile.router)
-
+app.include_router(cv.router)
 app.include_router(match.router)
+app.include_router(profile.router)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
