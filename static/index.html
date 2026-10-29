@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CV Matcher</title>
+  <meta name="description" content="Sube tu CV, pega una oferta de trabajo y obtén un porcentaje de compatibilidad con una checklist de requisitos.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>CV Matcher</h1>
+      <p class="subtitle">Sube tu CV, pega una oferta y descubre cuánto encaja.</p>
+    </header>
+
+    <p id="demo-banner" class="banner" hidden>
+      Modo demostración: el perfil y los resultados son de ejemplo, no se analiza tu CV ni la oferta todavía.
+    </p>
+
+    <ol class="stepper" aria-label="Progreso">
+      <li class="stepper-item" data-step="1"><span class="dot">1</span><span class="label">Tu CV</span></li>
+      <li class="stepper-item" data-step="2"><span class="dot">2</span><span class="label">La oferta</span></li>
+      <li class="stepper-item" data-step="3"><span class="dot">3</span><span class="label">Resultado</span></li>
+    </ol>
+
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+
+    <!-- PASO 1: CV -->
+    <section id="step-1" class="step" aria-labelledby="title-1">
+      <h2 id="title-1" tabindex="-1">Sube tu CV</h2>
+
+      <form id="cv-form">
+        <p class="muted">PDF o DOCX, máximo 5 MB. Extraeremos tu perfil y podrás revisarlo antes de guardarlo.</p>
+        <input type="file" id="cv-file" accept=".pdf,.docx" required>
+        <label class="consent">
+          <input type="checkbox" id="consent" required>
+          <span>Acepto que se procese el contenido de mi CV para calcular la compatibilidad. Podré borrar mis datos cuando quiera.</span>
+        </label>
+        <div class="actions">
+          <button type="submit" id="cv-submit">Extraer mi perfil</button>
+        </div>
+      </form>
+
+      <div id="profile-review" hidden>
+        <p class="muted">Esto es lo que hemos extraído. Quita lo que sea incorrecto: solo se usará lo que confirmes.</p>
+        <div id="profile-sections"></div>
+        <div class="actions">
+          <button type="button" id="cv-reset" class="secondary">Subir otro CV</button>
+          <button type="button" id="cv-confirm">Confirmar y continuar</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- PASO 2: OFERTA -->
+    <section id="step-2" class="step" aria-labelledby="title-2" hidden>
+      <h2 id="title-2" tabindex="-1">Pega la oferta</h2>
+      <form id="offer-form">
+        <label for="offer" class="visually-hidden">Texto de la oferta</label>
+        <textarea id="offer" rows="10" maxlength="8000"
+          placeholder="Pega aquí el texto completo de la oferta..." required></textarea>
+        <div class="form-footer">
+          <span id="counter" class="counter">0 / 8000</span>
+          <div class="actions">
+            <button type="button" id="example-btn" class="secondary">Usar ejemplo</button>
+            <button type="button" id="offer-back" class="secondary">Volver</button>
+            <button type="submit" id="offer-submit">Analizar compatibilidad</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <!-- PASO 3: RESULTADO -->
+    <section id="step-3" class="step" aria-labelledby="title-3" hidden>
+      <h2 id="title-3" tabindex="-1">Resultado</h2>
+      <div class="score-card">
+        <div id="score-ring" class="score-ring"><span id="score-value">0%</span></div>
+        <div>
+          <p class="score-title">Compatibilidad</p>
+          <p id="score-summary" class="muted"></p>
+        </div>
+      </div>
+      <h3>Checklist de requisitos</h3>
+      <ul id="requirements" class="requirements"></ul>
+      <div class="actions">
+        <button type="button" id="another-offer">Analizar otra oferta</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Proyecto de portfolio · Fase 1</p>
+    <button type="button" id="delete-data" class="link">Borrar mis datos</button>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
