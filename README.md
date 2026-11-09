@@ -95,7 +95,7 @@ This is the contract the frontend expects. The endpoints are implemented first w
 | Analyze an offer | `POST /match` | `{"offer": "..."}` | `{"score": 72, "requirements": [...]}` |
 | Delete the user's data | `DELETE /profile` | none | `204 No Content` |
 
-A profile has the sections `experiencia`, `formacion`, `cursos`, `skills`, `idiomas`, and `logros`. Each section is a list of `{"title": "...", "detail": "..."}` entries.
+A profile has the sections `experience`, `education`, `courses`, `skills`, `languages`, and `achievements`. Each section is a list of `{"title": "...", "detail": "..."}` entries.
 
 Each requirement is `{"text": "...", "status": "...", "evidence": "..."}`, where `status` is `cumple`, `parcial`, or `no_cumple`, and `evidence` is `null` when the profile has nothing to support the requirement.
 
