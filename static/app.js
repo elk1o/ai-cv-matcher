@@ -19,19 +19,19 @@ Requisitos:
 
 // Datos ficticios con la forma del contrato de los endpoints.
 const MOCK_PROFILE = {
-  experiencia: [
+  experience: [
     { title: "Desarrollador backend · Empresa Ejemplo S.L.", detail: "2018-2022 · Python, Django, PostgreSQL" },
     { title: "Ingeniero de software · Compañía Demo", detail: "2022-actualidad · APIs REST, CI/CD" },
   ],
-  formacion: [{ title: "Grado en Ingeniería Informática", detail: "Universidad Ejemplo" }],
-  cursos: [{ title: "Curso de IA generativa", detail: "LangChain, RAG y agentes" }],
+  education: [{ title: "Grado en Ingeniería Informática", detail: "Universidad Ejemplo" }],
+  courses: [{ title: "Curso de IA generativa", detail: "LangChain, RAG y agentes" }],
   skills: [
     { title: "Python", detail: "" },
     { title: "Django", detail: "" },
     { title: "PostgreSQL", detail: "" },
     { title: "Docker", detail: "" },
   ],
-  idiomas: [{ title: "Inglés", detail: "B2" }],
+  languages: [{ title: "Inglés", detail: "B2" }],
 };
 
 const MOCK_RESULT = {
@@ -48,12 +48,12 @@ const MOCK_RESULT = {
 };
 
 const SECTION_LABELS = {
-  experiencia: "Experiencia",
-  formacion: "Formación",
-  cursos: "Cursos",
+  experience: "Experiencia",
+  education: "Formación",
+  courses: "Cursos",
   skills: "Habilidades",
-  idiomas: "Idiomas",
-  logros: "Logros",
+  languages: "Idiomas",
+  achievements: "Logros",
 };
 
 const STATUS_LABELS = { cumple: "Cumple", parcial: "Parcial", no_cumple: "No cumple" };
