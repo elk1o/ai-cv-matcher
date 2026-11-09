@@ -1,9 +1,11 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProfileEntry(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     title: str = Field(min_length=1, max_length=200)
     detail: str = Field(default="", max_length=2000)
 
