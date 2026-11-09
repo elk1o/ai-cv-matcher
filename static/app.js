@@ -1,376 +1,548 @@
 "use strict";
 
-// Pon USE_MOCK = false cuando existan los endpoints en el backend.
+// ---------------------------------------------------------------------------
+// Configuración
+// ---------------------------------------------------------------------------
+// true  -> datos ficticios, no se llama al backend.
+// false -> llama a los endpoints reales (mismo origen).
 const USE_MOCK = true;
-const MAX_OFFER = 8000;
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
-const ALLOWED_EXT = [".pdf", ".docx"];
 
-const EXAMPLE_OFFER = `Senior Python Developer (Backend)
+const LIMITS = {
+  title: 200,
+  detail: 2000,
+  offerMin: 10,
+  offerMax: 8000,
+  entriesPerSection: 50,
+  fileBytes: 5 * 1024 * 1024,
+};
 
-Buscamos un desarrollador/a backend con al menos 5 años de experiencia en Python.
+// Oferta ficticia para probar el flujo sin buscar una real.
+const EXAMPLE_OFFER = `Desarrollador/a Backend Python — Empresa Ejemplo S.L.
+
+Buscamos una persona para incorporarse a nuestro equipo de producto.
+
 Requisitos:
-- Python y Django o FastAPI
-- APIs REST y bases de datos PostgreSQL
-- Experiencia con Docker y CI/CD
-- Valorable: experiencia con LLMs, LangChain o LangGraph
-- Valorable: Kubernetes
-- Inglés B2 o superior`;
+- 3+ años de experiencia con Python
+- Conocimientos de FastAPI o Django
+- SQL y bases de datos relacionales
+- Git y trabajo con control de versiones
+- Inglés B2
 
-// Datos ficticios con la forma del contrato de los endpoints.
-const MOCK_PROFILE = {
-  experiencia: [
-    { title: "Desarrollador backend · Empresa Ejemplo S.L.", detail: "2018-2022 · Python, Django, PostgreSQL" },
-    { title: "Ingeniero de software · Compañía Demo", detail: "2022-actualidad · APIs REST, CI/CD" },
-  ],
-  formacion: [{ title: "Grado en Ingeniería Informática", detail: "Universidad Ejemplo" }],
-  cursos: [{ title: "Curso de IA generativa", detail: "LangChain, RAG y agentes" }],
-  skills: [
-    { title: "Python", detail: "" },
-    { title: "Django", detail: "" },
-    { title: "PostgreSQL", detail: "" },
-    { title: "Docker", detail: "" },
-  ],
-  idiomas: [{ title: "Inglés", detail: "B2" }],
+Valorable: Docker, AWS, tests automatizados.`;
+
+// Claves = las del schema Profile del backend.
+const SECTIONS = [
+  ["experience", "Experiencia"],
+  ["education", "Formación"],
+  ["courses", "Cursos"],
+  ["skills", "Skills"],
+  ["languages", "Idiomas"],
+  ["achievements", "Logros"],
+];
+
+// Claves = los valores de OfferRequirement.status del backend.
+const STATUS = {
+  OK: { label: "Cumple", cls: "ok" },
+  Partial: { label: "Parcial", cls: "partial" },
+  KO: { label: "No cumple", cls: "ko" },
 };
 
-const MOCK_RESULT = {
-  score: 72,
-  requirements: [
-    { text: "Python 5+ años", status: "cumple", evidence: "Desarrollador backend en Empresa Ejemplo S.L. (2018-2022)." },
-    { text: "Django o FastAPI", status: "cumple", evidence: "Django listado en habilidades y usado en Empresa Ejemplo." },
-    { text: "PostgreSQL", status: "cumple", evidence: "PostgreSQL en habilidades y en la experiencia de 2018-2022." },
-    { text: "Docker y CI/CD", status: "parcial", evidence: "CI/CD en Compañía Demo; Docker solo aparece en habilidades." },
-    { text: "LLMs, LangChain o LangGraph", status: "parcial", evidence: "Curso de IA generativa con LangChain, RAG y agentes." },
-    { text: "Kubernetes", status: "no_cumple", evidence: null },
-    { text: "Inglés B2 o superior", status: "cumple", evidence: "Inglés B2 en idiomas." },
-  ],
-};
+// ---------------------------------------------------------------------------
+// Estado
+// ---------------------------------------------------------------------------
+let profile = null;     // perfil en revisión o confirmado
+let editing = null;     // { section, index } ; index === null => entrada nueva
+let busy = false;
 
-const SECTION_LABELS = {
-  experiencia: "Experiencia",
-  formacion: "Formación",
-  cursos: "Cursos",
-  skills: "Habilidades",
-  idiomas: "Idiomas",
-  logros: "Logros",
-};
-
-const STATUS_LABELS = { cumple: "Cumple", parcial: "Parcial", no_cumple: "No cumple" };
-
-const state = { step: 1, profile: null, confirmed: false };
-
+// ---------------------------------------------------------------------------
+// Utilidades DOM (todo el contenido dinámico se pinta como texto, nunca HTML)
+// ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const steps = [1, 2, 3].map((n) => $(`step-${n}`));
-const stepperItems = document.querySelectorAll(".stepper-item");
-const statusEl = $("status");
-const cvForm = $("cv-form");
-const cvFile = $("cv-file");
-const cvSubmit = $("cv-submit");
-const profileReview = $("profile-review");
-const profileSections = $("profile-sections");
-const cvConfirm = $("cv-confirm");
-const offerForm = $("offer-form");
-const offerInput = $("offer");
-const offerSubmit = $("offer-submit");
-const counter = $("counter");
-const scoreRing = $("score-ring");
-const scoreValue = $("score-value");
-const scoreSummary = $("score-summary");
-const requirementsEl = $("requirements");
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function setStatus(message, isError = false) {
-  statusEl.textContent = message;
-  statusEl.classList.toggle("error", isError);
-}
-
-// ---- API (mock o real) ----
-
-async function requestJson(url, options) {
-  const response = await fetch(url, options);
-  if (!response.ok) {
-    throw new Error(`El servidor respondió con el error ${response.status}`);
+function h(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else if (value === true) node.setAttribute(key, "");
+    else if (value !== false && value != null) node.setAttribute(key, value);
   }
-  return response.status === 204 ? null : response.json();
-}
-
-async function apiExtractProfile(file) {
-  if (USE_MOCK) {
-    await delay(900);
-    return structuredClone(MOCK_PROFILE);
+  for (const child of children.flat()) {
+    if (child == null || child === false) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
-  const body = new FormData();
-  body.append("file", file);
-  const data = await requestJson("/cv", { method: "POST", body });
-  return data.profile;
+  return node;
 }
 
-async function apiConfirmProfile(profile) {
-  if (USE_MOCK) {
-    await delay(300);
-    return;
+function showMessage(text, isError = false) {
+  const el = $("message");
+  el.textContent = text;
+  el.classList.toggle("error", isError);
+  el.hidden = false;
+}
+
+function clearMessage() {
+  $("message").hidden = true;
+  $("message").textContent = "";
+}
+
+function setBusy(value) {
+  busy = value;
+  document.body.style.cursor = value ? "progress" : "";
+  updateUploadButton();
+  updateOfferButton();
+  $("confirm-btn").disabled = value || editing !== null;
+  $("delete-btn").disabled = value;
+}
+
+// ---------------------------------------------------------------------------
+// Capa de API
+// ---------------------------------------------------------------------------
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function request(path, options = {}) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    let msg = `Error ${res.status}.`;
+    if (res.status === 401) msg = "Código de acceso inválido.";
+    else if (res.status === 422) msg = "Los datos enviados no son válidos. Revisa los límites de longitud.";
+    else if (res.status === 429) msg = "Has alcanzado el límite diario de análisis.";
+    else if (res.status >= 500) msg = "Error del servidor. Inténtalo de nuevo en un momento.";
+    throw new Error(msg);
   }
-  await requestJson("/cv/confirm", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profile }),
-  });
+  return res.status === 204 ? null : res.json();
 }
 
-async function apiAnalyze(offer) {
-  if (USE_MOCK) {
-    await delay(800);
-    return MOCK_RESULT;
+const MOCK_PROFILE = {
+  experience: [
+    { title: "Desarrollador backend — Empresa Ejemplo", detail: "2020-2024. APIs REST con Python y bases de datos relacionales." },
+    { title: "Desarrollador junior — Estudio Demo", detail: "2018-2020. Mantenimiento de aplicaciones web." },
+  ],
+  education: [{ title: "Grado en Informática — Universidad Ficticia", detail: "" }],
+  courses: [{ title: "Curso de bases de datos", detail: "40 horas" }],
+  skills: [{ title: "Python" }, { title: "SQL" }, { title: "Git" }].map((s) => ({ detail: "", ...s })),
+  languages: [{ title: "Inglés", detail: "B2" }],
+  achievements: [],
+};
+
+const api = {
+  async uploadCv(file) {
+    if (USE_MOCK) {
+      await sleep(700);
+      return { profile: structuredClone(MOCK_PROFILE) };
+    }
+    const body = new FormData();
+    body.append("file", file);
+    // Sin cabecera Content-Type: el navegador la genera con el boundary.
+    return request("/cv", { method: "POST", body });
+  },
+
+  async confirmProfile(p) {
+    if (USE_MOCK) {
+      await sleep(300);
+      return null;
+    }
+    return request("/cv/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: p }),
+    });
+  },
+
+  async analyzeOffer(offer) {
+    if (USE_MOCK) {
+      await sleep(900);
+      return {
+        score: 67,
+        requirements: [
+          { text: "Python", status: "OK", evidence: "Desarrollador backend — Empresa Ejemplo: APIs REST con Python" },
+          { text: "Bases de datos SQL", status: "OK", evidence: "Skill: SQL" },
+          { text: "Experiencia con Docker", status: "Partial", evidence: "Mencionas despliegues, pero no Docker de forma explícita" },
+          { text: "AWS", status: "KO", evidence: null },
+        ],
+      };
+    }
+    return request("/offer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ offer }),
+    });
+  },
+
+  async deleteProfile() {
+    if (USE_MOCK) {
+      await sleep(300);
+      return null;
+    }
+    return request("/profile", { method: "DELETE" });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Navegación entre pasos
+// ---------------------------------------------------------------------------
+function showStep(n) {
+  for (const section of document.querySelectorAll("main > section")) {
+    section.hidden = Number(section.dataset.step) !== n;
   }
-  return requestJson("/match", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ offer }),
-  });
+  for (const li of $("steps").children) {
+    const step = Number(li.dataset.step);
+    li.classList.toggle("done", step < n);
+    if (step === n) li.setAttribute("aria-current", "step");
+    else li.removeAttribute("aria-current");
+  }
+  window.scrollTo({ top: 0 });
 }
 
-async function apiDeleteData() {
-  if (USE_MOCK) return;
-  await requestJson("/profile", { method: "DELETE" });
-}
-
-// ---- Navegación entre pasos ----
-
-function goTo(step) {
-  if (step >= 2 && !state.confirmed) return;
-  state.step = step;
-  steps.forEach((section, index) => { section.hidden = index + 1 !== step; });
-  stepperItems.forEach((item) => {
-    const n = Number(item.dataset.step);
-    item.classList.toggle("current", n === step);
-    item.classList.toggle("done", n < step);
-    if (n === step) item.setAttribute("aria-current", "step");
-    else item.removeAttribute("aria-current");
-  });
-  setStatus("");
-  $(`title-${step}`).focus();
-}
-
-// ---- Paso 1: CV ----
-
+// ---------------------------------------------------------------------------
+// Paso 1a: subida
+// ---------------------------------------------------------------------------
 function validateFile(file) {
+  if (!file) return "Selecciona un archivo.";
   const name = file.name.toLowerCase();
-  if (!ALLOWED_EXT.some((ext) => name.endsWith(ext))) return "Solo se admiten archivos PDF o DOCX.";
-  if (file.size > MAX_FILE_BYTES) return "El archivo supera los 5 MB.";
+  if (!name.endsWith(".pdf") && !name.endsWith(".docx")) return "Solo se admiten archivos PDF o DOCX.";
+  if (file.size > LIMITS.fileBytes) return "El archivo supera los 5 MB.";
+  if (file.size === 0) return "El archivo está vacío.";
   return null;
 }
 
-// Todo lo que viene del backend o del LLM se pinta con textContent, nunca con innerHTML.
-function renderProfile() {
-  profileSections.replaceChildren();
-  let total = 0;
+function updateUploadButton() {
+  const file = $("cv-file").files[0];
+  $("upload-btn").disabled = busy || !file || !$("consent").checked || validateFile(file) !== null;
+}
 
-  Object.entries(SECTION_LABELS).forEach(([key, label]) => {
-    const items = state.profile[key];
-    if (!Array.isArray(items) || items.length === 0) return;
-    total += items.length;
+function onFileChange() {
+  const file = $("cv-file").files[0];
+  const error = file ? validateFile(file) : null;
+  const el = $("file-error");
+  el.textContent = error || "";
+  el.hidden = !error;
+  updateUploadButton();
+}
 
-    const title = document.createElement("h4");
-    title.textContent = label;
-    const list = document.createElement("ul");
-    list.className = "profile-list";
+async function onUploadSubmit(event) {
+  event.preventDefault();
+  const file = $("cv-file").files[0];
+  if (busy || validateFile(file) !== null || !$("consent").checked) return;
 
-    items.forEach((entry, index) => {
-      const li = document.createElement("li");
-      li.className = "profile-item";
+  clearMessage();
+  setBusy(true);
+  $("upload-btn").textContent = "Extrayendo…";
+  try {
+    const data = await api.uploadCv(file);
+    profile = normalizeProfile(data.profile);
+    editing = null;
+    $("upload-phase").hidden = true;
+    $("review-phase").hidden = false;
+    renderReview();
+  } catch (err) {
+    showMessage(err.message, true);
+  } finally {
+    $("upload-btn").textContent = "Extraer mi perfil";
+    setBusy(false);
+  }
+}
 
-      const text = document.createElement("div");
-      const strong = document.createElement("strong");
-      strong.textContent = entry.title;
-      text.append(strong);
-      if (entry.detail) {
-        const detail = document.createElement("span");
-        detail.textContent = entry.detail;
-        text.append(detail);
-      }
+// Garantiza que existen las seis secciones aunque el backend omita alguna.
+function normalizeProfile(p) {
+  const result = {};
+  for (const [key] of SECTIONS) {
+    result[key] = Array.isArray(p?.[key])
+      ? p[key].map((e) => ({ title: String(e.title ?? ""), detail: String(e.detail ?? "") }))
+      : [];
+  }
+  return result;
+}
 
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "remove-btn";
-      remove.textContent = "Quitar";
-      remove.setAttribute("aria-label", `Quitar: ${entry.title}`);
-      remove.addEventListener("click", () => {
-        items.splice(index, 1);
-        renderProfile();
-      });
+// ---------------------------------------------------------------------------
+// Paso 1b: revisión (HITL): editar, añadir y quitar
+// ---------------------------------------------------------------------------
+function totalEntries() {
+  return SECTIONS.reduce((sum, [key]) => sum + profile[key].length, 0);
+}
 
-      li.append(text, remove);
-      list.append(li);
-    });
+function isEditing(section, index) {
+  return editing !== null && editing.section === section && editing.index === index;
+}
 
-    profileSections.append(title, list);
+function startEdit(section, index) {
+  editing = { section, index };
+  renderReview();
+}
+
+function cancelEdit() {
+  editing = null;
+  renderReview();
+}
+
+function removeEntry(section, index) {
+  profile[section].splice(index, 1);
+  editing = null;
+  renderReview();
+}
+
+function renderEntryForm(section, index, entry) {
+  const titleInput = h("input", { type: "text", maxlength: LIMITS.title, value: entry.title, id: "edit-title" });
+  const detailInput = h("textarea", { rows: 3, maxlength: LIMITS.detail, id: "edit-detail" });
+  detailInput.value = entry.detail;
+  const error = h("p", { class: "field-error", hidden: true });
+
+  const save = () => {
+    const title = titleInput.value.trim();
+    const detail = detailInput.value.trim();
+    if (title.length < 1 || title.length > LIMITS.title) {
+      error.textContent = `El título es obligatorio (máximo ${LIMITS.title} caracteres).`;
+      error.hidden = false;
+      titleInput.focus();
+      return;
+    }
+    if (detail.length > LIMITS.detail) {
+      error.textContent = `El detalle admite como máximo ${LIMITS.detail} caracteres.`;
+      error.hidden = false;
+      detailInput.focus();
+      return;
+    }
+    if (index === null) profile[section].push({ title, detail });
+    else profile[section][index] = { title, detail };
+    editing = null;
+    renderReview();
+  };
+
+  const form = h(
+    "li",
+    { class: "entry entry-form" },
+    h("label", { for: "edit-title" }, "Título"),
+    titleInput,
+    h("label", { for: "edit-detail" }, "Detalle (opcional)"),
+    detailInput,
+    error,
+    h(
+      "div",
+      { class: "actions" },
+      h("button", { type: "button", class: "btn primary small", onclick: save }, "Guardar"),
+      h("button", { type: "button", class: "btn small", onclick: cancelEdit }, "Cancelar"),
+    ),
+  );
+  titleInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      save();
+    }
   });
-
-  cvConfirm.disabled = total === 0;
+  return form;
 }
 
-function showReview() {
-  cvForm.hidden = true;
-  profileReview.hidden = false;
-  renderProfile();
+function renderEntry(section, index, entry) {
+  if (isEditing(section, index)) return renderEntryForm(section, index, entry);
+  return h(
+    "li",
+    { class: "entry" },
+    h("div", { class: "entry-text" }, h("strong", {}, entry.title), entry.detail ? h("p", {}, entry.detail) : null),
+    h(
+      "div",
+      { class: "entry-actions" },
+      h("button", { type: "button", class: "btn small", onclick: () => startEdit(section, index) }, "Editar"),
+      h("button", { type: "button", class: "btn small", onclick: () => removeEntry(section, index) }, "Quitar"),
+    ),
+  );
 }
 
-function showUpload() {
-  state.profile = null;
-  state.confirmed = false;
-  cvForm.reset();
-  cvForm.hidden = false;
-  profileReview.hidden = true;
+function renderReview() {
+  const container = $("review-sections");
+  container.replaceChildren();
+
+  for (const [key, label] of SECTIONS) {
+    const entries = profile[key];
+    const adding = isEditing(key, null);
+    const full = entries.length >= LIMITS.entriesPerSection;
+
+    const list = h("ul", { class: "entries" });
+    entries.forEach((entry, i) => list.append(renderEntry(key, i, entry)));
+    if (adding) list.append(renderEntryForm(key, null, { title: "", detail: "" }));
+    if (entries.length === 0 && !adding) list.append(h("li", { class: "empty" }, "Sin entradas."));
+
+    container.append(
+      h(
+        "div",
+        { class: "profile-section" },
+        h(
+          "div",
+          { class: "profile-section-head" },
+          h("h3", {}, `${label} (${entries.length})`),
+          h(
+            "button",
+            {
+              type: "button",
+              class: "btn small",
+              disabled: full || editing !== null,
+              title: full ? `Máximo ${LIMITS.entriesPerSection} entradas` : null,
+              onclick: () => startEdit(key, null),
+            },
+            "+ Añadir",
+          ),
+        ),
+        list,
+      ),
+    );
+  }
+
+  const total = totalEntries();
+  $("review-summary").textContent = editing
+    ? "Termina de editar la entrada abierta para poder confirmar."
+    : total === 0
+      ? "El perfil está vacío. Añade al menos una entrada para continuar."
+      : `${total} entradas en total.`;
+  $("confirm-btn").disabled = busy || editing !== null || total === 0;
+
+  const firstInput = container.querySelector(".entry-form input");
+  if (firstInput) firstInput.focus();
 }
 
-async function handleCvSubmit(event) {
+async function onConfirm() {
+  if (busy || editing !== null || totalEntries() === 0) return;
+  clearMessage();
+  setBusy(true);
+  $("confirm-btn").textContent = "Guardando…";
+  try {
+    await api.confirmProfile(profile);
+    showMessage("Perfil confirmado y guardado.");
+    showStep(2);
+  } catch (err) {
+    showMessage(err.message, true);
+  } finally {
+    $("confirm-btn").textContent = "Confirmar perfil";
+    setBusy(false);
+    renderReview();
+  }
+}
+
+function onBackToUpload() {
+  profile = null;
+  editing = null;
+  $("cv-file").value = "";
+  $("file-error").hidden = true;
+  $("review-phase").hidden = true;
+  $("upload-phase").hidden = false;
+  updateUploadButton();
+  clearMessage();
+}
+
+// ---------------------------------------------------------------------------
+// Paso 2: oferta
+// ---------------------------------------------------------------------------
+function offerLength() {
+  return $("offer-text").value.trim().length;
+}
+
+function updateOfferButton() {
+  const len = offerLength();
+  $("offer-counter").textContent = `${$("offer-text").value.length} / ${LIMITS.offerMax}`;
+  $("offer-btn").disabled = busy || len < LIMITS.offerMin || len > LIMITS.offerMax;
+}
+
+async function onOfferSubmit(event) {
   event.preventDefault();
-  const file = cvFile.files[0];
-  if (!file) {
-    setStatus("Selecciona primero un archivo.", true);
-    return;
-  }
-  const problem = validateFile(file);
-  if (problem) {
-    setStatus(problem, true);
-    return;
-  }
+  const offer = $("offer-text").value.trim();
+  if (busy || offer.length < LIMITS.offerMin || offer.length > LIMITS.offerMax) return;
 
-  cvSubmit.disabled = true;
-  setStatus("Extrayendo tu perfil...");
+  clearMessage();
+  setBusy(true);
+  $("offer-btn").textContent = "Analizando…";
   try {
-    state.profile = await apiExtractProfile(file);
-    state.confirmed = false;
-    setStatus("");
-    showReview();
-  } catch (error) {
-    setStatus(`No se pudo leer el CV: ${error.message}`, true);
+    const result = await api.analyzeOffer(offer);
+    renderResult(result);
+    showStep(3);
+  } catch (err) {
+    showMessage(err.message, true);
   } finally {
-    cvSubmit.disabled = false;
+    $("offer-btn").textContent = "Analizar oferta";
+    setBusy(false);
   }
 }
 
-async function handleConfirm() {
-  cvConfirm.disabled = true;
-  setStatus("Guardando tu perfil...");
+// ---------------------------------------------------------------------------
+// Paso 3: resultado
+// ---------------------------------------------------------------------------
+function renderResult(result) {
+  const score = Math.max(0, Math.min(100, Number(result.score) || 0));
+  $("score-value").textContent = `${score}%`;
+  $("score-fill").style.width = `${score}%`;
+  $("score-meter").setAttribute("aria-valuenow", String(score));
+
+  const list = $("requirements");
+  list.replaceChildren();
+  for (const req of result.requirements ?? []) {
+    const status = STATUS[req.status] ?? { label: String(req.status), cls: "ko" };
+    list.append(
+      h(
+        "li",
+        { class: "requirement" },
+        h(
+          "div",
+          { class: "requirement-head" },
+          h("span", { class: "requirement-text" }, req.text),
+          h("span", { class: `badge ${status.cls}` }, status.label),
+        ),
+        h("p", { class: "evidence" }, req.evidence ? `Evidencia: ${req.evidence}` : "Sin evidencia en tu perfil."),
+      ),
+    );
+  }
+}
+
+function onUseExample() {
+  $("offer-text").value = EXAMPLE_OFFER;
+  updateOfferButton();
+  $("offer-text").focus();
+}
+
+function onAnotherOffer() {
+  $("offer-text").value = "";
+  updateOfferButton();
+  clearMessage();
+  showStep(2);
+}
+
+// ---------------------------------------------------------------------------
+// Borrar datos
+// ---------------------------------------------------------------------------
+async function onDelete() {
+  if (busy) return;
+  if (!window.confirm("Se borrarán tu perfil y tus datos. Esta acción no se puede deshacer. ¿Continuar?")) return;
+  clearMessage();
+  setBusy(true);
   try {
-    await apiConfirmProfile(state.profile);
-    state.confirmed = true;
-    goTo(2);
-  } catch (error) {
-    setStatus(`No se pudo guardar el perfil: ${error.message}`, true);
+    await api.deleteProfile();
+    onBackToUpload();
+    $("consent").checked = false;
+    $("offer-text").value = "";
+    updateOfferButton();
+    showStep(1);
+    showMessage("Tus datos se han borrado.");
+  } catch (err) {
+    showMessage(err.message, true);
   } finally {
-    cvConfirm.disabled = false;
+    setBusy(false);
   }
 }
 
-// ---- Paso 2: oferta ----
-
-function updateCounter() {
-  counter.textContent = `${offerInput.value.length} / ${MAX_OFFER}`;
+// ---------------------------------------------------------------------------
+// Arranque
+// ---------------------------------------------------------------------------
+function init() {
+  $("demo-banner").hidden = !USE_MOCK;
+  $("cv-file").addEventListener("change", onFileChange);
+  $("consent").addEventListener("change", updateUploadButton);
+  $("upload-form").addEventListener("submit", onUploadSubmit);
+  $("confirm-btn").addEventListener("click", onConfirm);
+  $("back-upload-btn").addEventListener("click", onBackToUpload);
+  $("offer-text").addEventListener("input", updateOfferButton);
+  $("offer-form").addEventListener("submit", onOfferSubmit);
+  $("example-btn").addEventListener("click", onUseExample);
+  $("another-btn").addEventListener("click", onAnotherOffer);
+  $("delete-btn").addEventListener("click", onDelete);
+  updateUploadButton();
+  updateOfferButton();
+  showStep(1);
 }
 
-async function handleOfferSubmit(event) {
-  event.preventDefault();
-  const offer = offerInput.value.trim();
-  if (!offer) {
-    setStatus("Pega primero el texto de una oferta.", true);
-    return;
-  }
-
-  offerSubmit.disabled = true;
-  setStatus("Analizando la oferta...");
-  try {
-    const data = await apiAnalyze(offer);
-    renderResult(data);
-    goTo(3);
-  } catch (error) {
-    setStatus(`No se pudo analizar la oferta: ${error.message}`, true);
-  } finally {
-    offerSubmit.disabled = false;
-  }
-}
-
-// ---- Paso 3: resultado ----
-
-function buildRequirementItem(requirement) {
-  const item = document.createElement("li");
-  item.className = "requirement";
-
-  const head = document.createElement("div");
-  head.className = "requirement-head";
-
-  const status = STATUS_LABELS[requirement.status] ? requirement.status : "no_cumple";
-  const badge = document.createElement("span");
-  badge.className = `badge ${status}`;
-  badge.textContent = STATUS_LABELS[status];
-
-  const text = document.createElement("span");
-  text.className = "requirement-text";
-  text.textContent = requirement.text;
-
-  head.append(badge, text);
-
-  const evidence = document.createElement("p");
-  evidence.className = "requirement-evidence";
-  evidence.textContent = requirement.evidence || "Sin evidencia en tu perfil.";
-
-  item.append(head, evidence);
-  return item;
-}
-
-function renderResult(data) {
-  if (!data || typeof data.score !== "number" || !Array.isArray(data.requirements)) {
-    throw new Error("La respuesta del servidor no tiene el formato esperado");
-  }
-  const score = Math.max(0, Math.min(100, Math.round(data.score)));
-  scoreValue.textContent = `${score}%`;
-  scoreRing.style.setProperty("--score", String(score));
-
-  const count = (status) => data.requirements.filter((r) => r.status === status).length;
-  scoreSummary.textContent =
-    `${count("cumple")} cumplidos · ${count("parcial")} parciales · ${count("no_cumple")} no cumplidos`;
-  requirementsEl.replaceChildren(...data.requirements.map(buildRequirementItem));
-}
-
-// ---- Borrado de datos ----
-
-async function handleDeleteData() {
-  if (!window.confirm("¿Borrar tu perfil y todos tus datos? Esta acción no se puede deshacer.")) return;
-  try {
-    await apiDeleteData();
-  } catch (error) {
-    setStatus(`No se pudieron borrar los datos: ${error.message}`, true);
-    return;
-  }
-  offerInput.value = "";
-  updateCounter();
-  showUpload();
-  goTo(1);
-  setStatus("Tus datos se han borrado.");
-}
-
-// ---- Eventos ----
-
-cvForm.addEventListener("submit", handleCvSubmit);
-cvConfirm.addEventListener("click", handleConfirm);
-$("cv-reset").addEventListener("click", showUpload);
-offerForm.addEventListener("submit", handleOfferSubmit);
-offerInput.addEventListener("input", updateCounter);
-$("example-btn").addEventListener("click", () => {
-  offerInput.value = EXAMPLE_OFFER;
-  updateCounter();
-  offerInput.focus();
-});
-$("offer-back").addEventListener("click", () => {
-  if (state.profile) showReview();
-  goTo(1);
-});
-$("another-offer").addEventListener("click", () => goTo(2));
-$("delete-data").addEventListener("click", handleDeleteData);
-
-$("demo-banner").hidden = !USE_MOCK;
-updateCounter();
-goTo(1);
+init();
