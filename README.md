@@ -4,11 +4,13 @@ CV Matcher is a web application that compares a job offer with your CV. You uplo
 
 The backend is built with FastAPI and is designed to run its matching logic on LangChain and LangGraph. The frontend is a dependency-free single page served by the same FastAPI app, so the whole project is a single deployment.
 
-This project is in active development. The current version ships the FastAPI skeleton and a complete three-step frontend that runs in demo mode with fictional data; see [Project status](#project-status) for what works today and what comes next.
+This project is in active development. The current version ships the FastAPI skeleton with placeholder endpoints, the Pydantic schemas of the API contract, and a complete three-step frontend that runs in demo mode with fictional data; see [Project status](#project-status) for what works today and what comes next.
 
 ## What is included
 
 - A FastAPI application that serves a health check and the static frontend from a single URL.
+- Pydantic schemas for the API contract in `app/schemas.py`, with input validation (length limits, score range, allowed statuses).
+- Placeholder routers for the CV, offer, and profile endpoints, which return fixed responses and are not yet wired to the schemas.
 - A three-step frontend written in plain HTML, CSS, and JavaScript:
   1. Upload a PDF or DOCX CV, then review the extracted profile and remove incorrect entries before confirming it.
   2. Paste the text of a job offer.
@@ -30,18 +32,19 @@ Python, FastAPI, Uvicorn, Pydantic, `python-multipart` for file uploads, pytest 
 
 ## Repository structure
 
-Files marked `(planned)` are part of the agreed layout but are not implemented yet.
+Placeholder routers return fixed responses and do not use the schemas yet.
 
 ```text
 .
 ├── app/
 │   ├── __init__.py
 │   ├── main.py            # app creation, routers, static files mounted last
-│   ├── schemas.py         # (planned) Pydantic models for the API contract
+│   ├── schemas.py         # Pydantic models for the API contract
 │   └── routers/
 │       ├── __init__.py
-│       ├── cv.py          # (planned) POST /cv, POST /cv/confirm, DELETE /profile
-│       └── match.py       # (planned) POST /match
+│       ├── cv.py          # /cv and /cv/confirm (placeholder responses)
+│       ├── offer.py       # /offer (placeholder responses)
+│       └── profile.py     # DELETE /profile (placeholder response)
 ├── static/
 │   ├── index.html
 │   ├── style.css
@@ -96,22 +99,28 @@ python -m pytest -vs
 
 ### Demo mode
 
-`static/app.js` starts with `const USE_MOCK = true;`. In this mode the frontend never calls the backend and shows fictional data, and a banner tells the user so. Set it to `false` once the endpoints below exist.
+`static/app.js` starts with `const USE_MOCK = true;`. In this mode the frontend never calls the backend and shows fictional data, and a banner tells the user so. Set it to `false` once the endpoints below are implemented and the frontend is aligned with them (see the notes after the table).
 
 ## API contract
 
-This is the contract the frontend expects. The endpoints are implemented first with fixed responses, so the interface can be tested end to end, and are then replaced with real logic.
+This is the contract defined by the schemas in `app/schemas.py` (`ProfileResponse`, `ProfileConfirmRequest`, `OfferRequest`, `OfferResponse`). The endpoints are implemented first with fixed responses, so the interface can be tested end to end, and are then replaced with real logic.
 
 | Action | Endpoint | Request | Response |
 |---|---|---|---|
 | Upload a CV | `POST /cv` | `multipart/form-data`, field `file` | `{"profile": {...}}` |
 | Confirm the profile | `POST /cv/confirm` | `{"profile": {...}}` | `204 No Content` |
-| Analyze an offer | `POST /match` | `{"offer": "..."}` | `{"score": 72, "requirements": [...]}` |
+| Analyze an offer | `POST /offer` | `{"offer": "..."}` | `{"score": 72, "requirements": [...]}` |
 | Delete the user's data | `DELETE /profile` | none | `204 No Content` |
 
-A profile has the sections `experience`, `education`, `courses`, `skills`, `languages`, and `achievements`. Each section is a list of `{"title": "...", "detail": "..."}` entries.
+A profile has the sections `experience`, `education`, `courses`, `skills`, `languages`, and `achievements`, each a list of up to 50 entries. An entry is `{"title": "...", "detail": "..."}`: `title` is required (1 to 200 characters), `detail` is optional (up to 2000), and surrounding whitespace is stripped.
 
-Each requirement is `{"text": "...", "status": "...", "evidence": "..."}`, where `status` is `cumple`, `parcial`, or `no_cumple`, and `evidence` is `null` when the profile has nothing to support the requirement.
+The offer text must be between 10 and 8000 characters. The response `score` is an integer from 0 to 100. Each requirement is `{"text": "...", "status": "...", "evidence": "..."}`, where `status` is `OK`, `Partial`, or `KO`, and `evidence` is optional and `null` when the profile has nothing to support the requirement.
+
+Pending alignment between the frontend and the backend:
+
+- The frontend still calls `POST /match`, while the backend route is `POST /offer`.
+- The frontend and its demo data still use the statuses `cumple`, `parcial`, and `no_cumple` instead of `OK`, `Partial`, and `KO`.
+- The placeholder routers also expose `GET /cv` and `GET /offer`, which are not part of the contract.
 
 ## Deployment
 
@@ -129,12 +138,14 @@ The project is under development.
 Done:
 
 - FastAPI application serving the health check and the frontend.
+- Pydantic schemas for the API contract, with validation.
+- Placeholder routers for the CV, offer, and profile endpoints.
 - Three-step frontend with profile review, offer input, and result view, running in demo mode.
 
 Next:
 
-1. Define the Pydantic schemas and implement the four endpoints with fixed responses.
-2. Connect the frontend to the backend and add tests for every endpoint.
+1. Wire the placeholder endpoints to the schemas, so they validate requests and return fixed responses that match the contract.
+2. Align the frontend with the contract (route and status values), connect it to the backend, and add tests for every endpoint.
 3. Implement real offer matching: requirement extraction, evidence retrieval, and a score calculated in code.
 4. Implement real CV extraction, validating size and file contents on the server.
 5. Add persistence, per-user data isolation, invitation codes, and a daily usage quota.

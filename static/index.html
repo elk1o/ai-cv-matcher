@@ -4,95 +4,92 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CV Matcher</title>
-  <meta name="description" content="Sube tu CV, pega una oferta de trabajo y obtén un porcentaje de compatibilidad con una checklist de requisitos.">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="container">
-    <header>
-      <h1>CV Matcher</h1>
-      <p class="subtitle">Sube tu CV, pega una oferta y descubre cuánto encaja.</p>
-    </header>
+  <header class="site-header">
+    <h1>CV Matcher</h1>
+    <p class="tagline">Comprueba cuánto encaja tu perfil con una oferta de trabajo.</p>
+    <p id="demo-banner" class="demo-banner" hidden>Modo demo: los datos son ficticios y no se envía nada al servidor.</p>
+  </header>
 
-    <p id="demo-banner" class="banner" hidden>
-      Modo demostración: el perfil y los resultados son de ejemplo, no se analiza tu CV ni la oferta todavía.
-    </p>
-
-    <ol class="stepper" aria-label="Progreso">
-      <li class="stepper-item" data-step="1"><span class="dot">1</span><span class="label">Tu CV</span></li>
-      <li class="stepper-item" data-step="2"><span class="dot">2</span><span class="label">La oferta</span></li>
-      <li class="stepper-item" data-step="3"><span class="dot">3</span><span class="label">Resultado</span></li>
+  <nav aria-label="Progreso">
+    <ol class="steps" id="steps">
+      <li data-step="1"><span class="step-num">1</span><span class="step-label">Tu CV</span></li>
+      <li data-step="2"><span class="step-num">2</span><span class="step-label">Oferta</span></li>
+      <li data-step="3"><span class="step-num">3</span><span class="step-label">Resultado</span></li>
     </ol>
+  </nav>
 
-    <p id="status" class="status" role="status" aria-live="polite"></p>
+  <main>
+    <p id="message" class="message" role="status" aria-live="polite" hidden></p>
 
-    <!-- PASO 1: CV -->
-    <section id="step-1" class="step" aria-labelledby="title-1">
-      <h2 id="title-1" tabindex="-1">Sube tu CV</h2>
+    <!-- PASO 1 -->
+    <section id="step-1" data-step="1" aria-labelledby="h-step-1">
+      <h2 id="h-step-1">1. Sube tu CV</h2>
 
-      <form id="cv-form">
-        <p class="muted">PDF o DOCX, máximo 5 MB. Extraeremos tu perfil y podrás revisarlo antes de guardarlo.</p>
-        <input type="file" id="cv-file" accept=".pdf,.docx" required>
-        <label class="consent">
-          <input type="checkbox" id="consent" required>
-          <span>Acepto que se procese el contenido de mi CV para calcular la compatibilidad. Podré borrar mis datos cuando quiera.</span>
-        </label>
+      <div id="upload-phase">
+        <form id="upload-form" novalidate>
+          <label class="field-label" for="cv-file">Archivo (PDF o DOCX, máximo 5 MB)</label>
+          <input id="cv-file" type="file" accept=".pdf,.docx">
+          <p id="file-error" class="field-error" hidden></p>
+
+          <label class="check">
+            <input id="consent" type="checkbox">
+            <span>Acepto que mi CV se procese para extraer mi perfil. Podré revisarlo antes de guardarlo y borrar mis datos cuando quiera.</span>
+          </label>
+
+          <button id="upload-btn" class="btn primary" type="submit" disabled>Extraer mi perfil</button>
+        </form>
+      </div>
+
+      <div id="review-phase" hidden>
+        <p class="hint">Revisa lo que hemos extraído. Puedes editar, quitar o añadir entradas. No se guarda nada hasta que confirmes.</p>
+        <div id="review-sections"></div>
+        <p id="review-summary" class="hint"></p>
         <div class="actions">
-          <button type="submit" id="cv-submit">Extraer mi perfil</button>
-        </div>
-      </form>
-
-      <div id="profile-review" hidden>
-        <p class="muted">Esto es lo que hemos extraído. Quita lo que sea incorrecto: solo se usará lo que confirmes.</p>
-        <div id="profile-sections"></div>
-        <div class="actions">
-          <button type="button" id="cv-reset" class="secondary">Subir otro CV</button>
-          <button type="button" id="cv-confirm">Confirmar y continuar</button>
+          <button id="back-upload-btn" class="btn" type="button">Subir otro CV</button>
+          <button id="confirm-btn" class="btn primary" type="button">Confirmar perfil</button>
         </div>
       </div>
     </section>
 
-    <!-- PASO 2: OFERTA -->
-    <section id="step-2" class="step" aria-labelledby="title-2" hidden>
-      <h2 id="title-2" tabindex="-1">Pega la oferta</h2>
-      <form id="offer-form">
-        <label for="offer" class="visually-hidden">Texto de la oferta</label>
-        <textarea id="offer" rows="10" maxlength="8000"
-          placeholder="Pega aquí el texto completo de la oferta..." required></textarea>
-        <div class="form-footer">
-          <span id="counter" class="counter">0 / 8000</span>
-          <div class="actions">
-            <button type="button" id="example-btn" class="secondary">Usar ejemplo</button>
-            <button type="button" id="offer-back" class="secondary">Volver</button>
-            <button type="submit" id="offer-submit">Analizar compatibilidad</button>
-          </div>
+    <!-- PASO 2 -->
+    <section id="step-2" data-step="2" aria-labelledby="h-step-2" hidden>
+      <h2 id="h-step-2">2. Pega la oferta</h2>
+      <form id="offer-form" novalidate>
+        <label class="field-label" for="offer-text">Texto de la oferta (entre 10 y 8000 caracteres)</label>
+        <textarea id="offer-text" rows="12" maxlength="8000" placeholder="Ejemplo (ficticio):&#10;&#10;Desarrollador/a Backend Python — Empresa Ejemplo S.L.&#10;&#10;Buscamos una persona para incorporarse a nuestro equipo de producto.&#10;&#10;Requisitos:&#10;- 3+ años de experiencia con Python&#10;- Conocimientos de FastAPI o Django&#10;- SQL y bases de datos relacionales&#10;- Git y trabajo con control de versiones&#10;- Inglés B2&#10;&#10;Valorable: Docker, AWS, tests automatizados.&#10;&#10;Pega aquí la descripción completa de tu oferta."></textarea>
+        <p id="offer-counter" class="counter">0 / 8000</p>
+        <div class="actions">
+          <button id="example-btn" class="btn" type="button">Usar oferta de ejemplo</button>
+          <button id="offer-btn" class="btn primary" type="submit" disabled>Analizar oferta</button>
         </div>
       </form>
     </section>
 
-    <!-- PASO 3: RESULTADO -->
-    <section id="step-3" class="step" aria-labelledby="title-3" hidden>
-      <h2 id="title-3" tabindex="-1">Resultado</h2>
+    <!-- PASO 3 -->
+    <section id="step-3" data-step="3" aria-labelledby="h-step-3" hidden>
+      <h2 id="h-step-3">3. Resultado</h2>
       <div class="score-card">
-        <div id="score-ring" class="score-ring"><span id="score-value">0%</span></div>
-        <div>
-          <p class="score-title">Compatibilidad</p>
-          <p id="score-summary" class="muted"></p>
+        <p class="score-label">Compatibilidad</p>
+        <p id="score-value" class="score-value">0%</p>
+        <div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Compatibilidad" id="score-meter">
+          <div id="score-fill" class="meter-fill"></div>
         </div>
       </div>
-      <h3>Checklist de requisitos</h3>
+      <h3>Requisitos</h3>
       <ul id="requirements" class="requirements"></ul>
       <div class="actions">
-        <button type="button" id="another-offer">Analizar otra oferta</button>
+        <button id="another-btn" class="btn primary" type="button">Analizar otra oferta</button>
       </div>
     </section>
   </main>
 
-  <footer>
-    <p>Proyecto de portfolio · Fase 1</p>
-    <button type="button" id="delete-data" class="link">Borrar mis datos</button>
+  <footer class="site-footer">
+    <button id="delete-btn" class="btn link danger" type="button">Borrar mis datos</button>
   </footer>
 
-  <script src="app.js" defer></script>
+  <script src="app.js"></script>
 </body>
 </html>
