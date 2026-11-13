@@ -12,7 +12,7 @@ from app.schemas import (
 )
 
 ###############################
-# 1. ProfileEntry
+# ProfileEntry
 ###############################
 
 # Test to handle empty title on ProfileEntry
@@ -58,19 +58,34 @@ def test_profile_entry_strips_whitespace():
     assert entry.title == "test"
 
 
-# # --- 2. Profile: perfil completo extraído del CV (POST /cv) ---
-# def test_profile_defaults_to_empty_lists():
-#     pass
+###############################
+# Profile
+###############################
 
+def test_profile_defaults_to_empty_lists():
+    profile = Profile()
+    assert profile.experience == []
+    assert profile.education == []
+    assert profile.courses == []
+    assert profile.skills == []
+    assert profile.languages == []
+    assert profile.achievements == []
 
-# def test_profile_instances_do_not_share_lists():
-#     pass
+def test_profile_instances_do_not_share_lists():
+    a = Profile()
+    b = Profile()
+    a.skills.append(ProfileEntry(title="Python"))
+    assert b.skills == []
 
-
-# @pytest.mark.parametrize("count, valid", [(50, True), (51, False)])
-# def test_profile_section_length_limits(count, valid):
-#     pass
-
+@pytest.mark.parametrize("count, valid", [(50, True), (51, False)])
+def test_profile_section_length_limits(count, valid):
+    entries = [ProfileEntry(title=f"Item {i}") for i in range(count)]
+    if valid:
+        profile = Profile(skills=entries)
+        assert len(profile.skills) == count
+    else:
+        with pytest.raises(ValidationError, match="skills"):
+            Profile(skills=entries)
 
 # # --- 3. ProfileResponse: respuesta de POST /cv ---
 # def test_profile_response_builds_from_nested_dict():
