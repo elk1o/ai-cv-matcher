@@ -80,6 +80,7 @@ def test_profile_instances_do_not_share_lists():
 @pytest.mark.parametrize("count, valid", [(50, True), (51, False)])
 def test_profile_section_length_limits(count, valid):
     entries = [ProfileEntry(title=f"Item {i}") for i in range(count)]
+    print(f"Number of entries on Profile section: {len(entries)} Valid: {valid}")
     if valid:
         profile = Profile(skills=entries)
         assert len(profile.skills) == count
@@ -87,63 +88,135 @@ def test_profile_section_length_limits(count, valid):
         with pytest.raises(ValidationError, match="skills"):
             Profile(skills=entries)
 
-# # --- 3. ProfileResponse: respuesta de POST /cv ---
-# def test_profile_response_builds_from_nested_dict():
-#     pass
+###############################
+# ProfileResponse
+###############################
+
+def test_profile_response_builds_from_nested_dict():
+    data = {
+        "profile": {
+            "skills": [{"title": "Python", "detail": "5 años"}],
+            "experience": [{"title": "Backend developer"}],
+        }
+    }
+    response = ProfileResponse(**data)
+
+    assert isinstance(response.profile, Profile)
+    assert isinstance(response.profile.skills[0], ProfileEntry)
+    assert response.profile.skills[0].title == "Python"
+    assert response.profile.skills[0].detail == "5 años"
+    assert response.profile.experience[0].detail == ""   # default
+    assert response.profile.education == []              # Omitted section
 
 
-# # --- 4. ProfileConfirmRequest: entrada de POST /cv/confirm ---
-# def test_profile_confirm_request_builds_from_nested_dict():
-#     pass
+###############################
+# ProfileConfirmRequest
+###############################
+def test_profile_confirm_request_builds_from_nested_dict():
+    data = {
+        "profile": {
+            "skills": [
+                {"title": "Ciberseguridad", "detail": "5 años"}, 
+                {"title": "Python", "detail": "5 años"}
+            ],
+            "experience": [
+                {"title": "Backend developer","detail": "Mas de 5 años"},
+                {"title": "Ciberserguridad", "detail": "5 años"}
+            ],
+        }
+    }
+    request = ProfileConfirmRequest(**data)
 
+    assert isinstance(request.profile, Profile)
+    assert isinstance(request.profile.skills[0], ProfileEntry)
+    assert request.profile.skills[0].title == "Ciberseguridad"
+    assert request.profile.skills[0].detail == "5 años"
+    assert request.profile.experience[0].title == "Backend developer"
+    assert request.profile.experience[0].detail == "Mas de 5 años"
+    assert request.profile.education == []
 
-# def test_profile_confirm_request_rejects_invalid_nested_entry():
-#     pass
+@pytest.mark.parametrize("title, valid", [("", False),("   ", False), ("A" * 201, False), ("A" * 20, True)])
+def test_profile_confirm_request_rejects_invalid_nested_entry(title, valid):
+    data = {
+        "profile": {
+            "skills": [
+                {"title": title, "detail": "5 años"}, 
+            ],
+            "experience": [
+                {"title": "Backend developer","detail": "Mas de 5 años"}
+            ],
+        }
+    }
+    print(f"Title length: {len(title)} Valid: {valid}")
+    if valid:
+        request = ProfileConfirmRequest(**data)
+    else:
+        with pytest.raises(ValidationError, match='title'):
+            request = ProfileConfirmRequest(**data)
 
+###############################
+# OfferRequest
+###############################
 
-# # --- 5. OfferRequest: entrada de POST /offer ---
-# @pytest.mark.parametrize(
-#     "length, valid",
-#     [(9, False), (10, True), (8000, True), (8001, False)],
-# )
-# def test_offer_request_length_limits(length, valid):
-#     offer = "a" * length
-#     if valid:
-#         assert OfferRequest(offer=offer).offer == offer
-#     else:
-#         with pytest.raises(ValidationError):
-#             OfferRequest(offer=offer)
+@pytest.mark.parametrize(
+    "offer, valid",
+    [("a"*9, False), ("a"*10, True), ("a"*8000, True), ("a"*8001, False), (""*5, False)],
+)
+def test_offer_request_length_limits(offer, valid):
+    print(f"Offer length: {len(offer)} Valid: {valid}")
+    if valid:
+        assert OfferRequest(offer=offer).offer == offer
+    else:
+        with pytest.raises(ValidationError):
+            OfferRequest(offer=offer)
 
+def test_offer_request_rejects_whitespace_only_offer():
+    with pytest.raises(ValidationError, match='offer'):
+        OfferRequest(offer="   ")
 
-# def test_offer_request_rejects_whitespace_only_offer():
-#     pass
+###############################
+# OfferRequirement
+###############################
 
+@pytest.mark.parametrize("status", ["ok", "partial", "ko", "", " ", "a"*80])
+def test_offer_requirement_rejects_invalid_status(status):
+    print(f"Offer requirement status: {status}")
+    with pytest.raises(ValidationError, match='status'):
+        OfferRequirement(status=status)
 
-# # --- 6. OfferRequirement: un requisito evaluado (dentro de la respuesta de POST /offer) ---
-# def test_offer_requirement_rejects_invalid_status():
-#     pass
+@pytest.mark.parametrize("status", ["OK", "Partial", "KO"])
+def test_offer_requirement_accepts_valid_statuses(status):
+    offer_requirement = OfferRequirement(text="Offer text", status=status)
+    assert isinstance(offer_requirement, OfferRequirement)
+    assert offer_requirement.status == status
 
+def test_offer_requirement_evidence_defaults_to_none():
+    offer_requirement = OfferRequirement(text="Offer text", status="OK")
+    assert isinstance(offer_requirement, OfferRequirement)
+    assert offer_requirement.evidence == None
 
-# @pytest.mark.parametrize("status", ["OK", "Partial", "KO"])
-# def test_offer_requirement_accepts_valid_statuses(status):
-#     pass
+###############################
+# OfferResponse
+###############################
 
+@pytest.mark.parametrize("score", [-1, 101, 150])
+def test_offer_response_rejects_score_out_of_range(score):
+    with pytest.raises(ValidationError, match="score"):
+        OfferResponse(score=score, requirements=[])
 
-# def test_offer_requirement_evidence_defaults_to_none():
-#     pass
+@pytest.mark.parametrize("score", [0, 100])
+def test_offer_response_accepts_score_boundaries(score):
+    offer_response = OfferResponse(score=score, requirements=[])
+    assert isinstance(offer_response, OfferResponse)
+    assert offer_response.score == score
 
-
-# # --- 7. OfferResponse: respuesta de POST /offer ---
-# @pytest.mark.parametrize("score", [-1, 101, 150])
-# def test_offer_response_rejects_score_out_of_range(score):
-#     with pytest.raises(ValidationError):
-#         OfferResponse(score=score, requirements=[])
-
-
-# @pytest.mark.parametrize("score", [0, 100])
-# def test_offer_response_accepts_score_boundaries(score):
-#     pass
-
-
-# def test_offer_response_rejects_invalid_requirement_status():
-#     pass
+def test_offer_response_rejects_invalid_requirement_status():
+    data = {
+        "score": 80,
+        "requirements": [
+            {"text": "Python", "status": "OK"},
+            {"text": "Docker", "status": "Quizá"},
+        ],
+    }
+    with pytest.raises(ValidationError, match="status"):
+        OfferResponse(**data)
