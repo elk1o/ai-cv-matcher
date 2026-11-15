@@ -1,16 +1,19 @@
 # CV Matcher
 
+[![Tests](https://github.com/elk1o/ai-cv-matcher/actions/workflows/tests.yml/badge.svg)](https://github.com/elk1o/ai-cv-matcher/actions/workflows/tests.yml)
+
 CV Matcher is a web application that compares a job offer with your CV. You upload your CV, review the profile extracted from it, paste a job offer, and get a compatibility percentage together with a checklist of the requirements you meet, partially meet, or miss, each backed by evidence from your own profile.
 
 The backend is built with FastAPI and is designed to run its matching logic on LangChain and LangGraph. The frontend is a dependency-free single page served by the same FastAPI app, so the whole project is a single deployment.
 
-This project is in active development. The current version ships the FastAPI skeleton with placeholder endpoints, the Pydantic schemas of the API contract, and a complete three-step frontend that runs in demo mode with fictional data; see [Project status](#project-status) for what works today and what comes next.
+This project is in active development. The current version ships the FastAPI skeleton with placeholder endpoints, the Pydantic schemas of the API contract, a pytest suite that runs automatically on GitHub Actions, and a complete three-step frontend that runs in demo mode with fictional data; see [Project status](#project-status) for what works today and what comes next.
 
 ## What is included
 
 - A FastAPI application that serves a health check and the static frontend from a single URL.
 - Pydantic schemas for the API contract in `app/schemas.py`, with input validation (length limits, score range, allowed statuses).
 - Placeholder routers for the CV, offer, and profile endpoints, which return fixed responses and are not yet wired to the schemas.
+- A pytest suite in `tests/` and a GitHub Actions workflow that runs it on every push and pull request.
 - A three-step frontend written in plain HTML, CSS, and JavaScript:
   1. Upload a PDF or DOCX CV, then review the extracted profile and remove incorrect entries before confirming it.
   2. Paste the text of a job offer.
@@ -28,7 +31,7 @@ This project is in active development. The current version ships the FastAPI ske
 
 ## Technology
 
-Python, FastAPI, Uvicorn, Pydantic, `python-multipart` for file uploads, pytest and HTTPX for tests, and vanilla HTML, CSS, and JavaScript for the frontend. LangChain, LangGraph, and a vector store are planned for the matching logic. The pinned dependency versions are listed in [requirements.txt](requirements.txt).
+Python, FastAPI, Uvicorn, Pydantic, `python-multipart` for file uploads, pytest and HTTPX for tests, GitHub Actions for continuous integration, and vanilla HTML, CSS, and JavaScript for the frontend. LangChain, LangGraph, and a vector store are planned for the matching logic. The pinned dependency versions are listed in [requirements.txt](requirements.txt).
 
 ## Repository structure
 
@@ -36,6 +39,9 @@ Placeholder routers return fixed responses and do not use the schemas yet.
 
 ```text
 .
+├── .github/
+│   └── workflows/
+│       └── tests.yml      # runs pytest on every push and pull request
 ├── app/
 │   ├── __init__.py
 │   ├── main.py            # app creation, routers, static files mounted last
@@ -51,6 +57,7 @@ Placeholder routers return fixed responses and do not use the schemas yet.
 │   └── app.js
 ├── tests/                 # pytest tests
 ├── .gitignore
+├── LICENSE
 ├── requirements.txt
 └── README.md
 ```
@@ -64,6 +71,8 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
+
+On Windows PowerShell, activate the environment with `.venv\Scripts\Activate.ps1`.
 
 The current version needs no API keys. Configuration and credentials for the LLM provider will be added when the matching logic is implemented; do not commit `.env` or any credentials.
 
@@ -83,23 +92,27 @@ Then open:
 
 The static files are mounted last in `app/main.py` on purpose: a mount on `/` would otherwise capture every route registered after it.
 
-## Running tests
-
-The project includes executable tests. Install the dependencies as described in [Getting started](#getting-started), then run from the repository root:
-
-```bash
-python -m pytest
-```
-
-For detailed output, use:
-
-```bash
-python -m pytest -vs
-```
-
 ### Demo mode
 
-`static/app.js` starts with `const USE_MOCK = true;`. In this mode the frontend never calls the backend and shows fictional data, and a banner tells the user so. Set it to `false` once the endpoints below are implemented and the frontend is aligned with them (see the notes after the table).
+`static/app.js` starts with `const USE_MOCK = true;`. In this mode the frontend never calls the backend and shows fictional data, and a banner tells the user so. Set it to `false` once the endpoints below are implemented and the frontend is aligned with them (see the notes after the table in [API contract](#api-contract)).
+
+## Running tests
+
+Install the dependencies as described in [Getting started](#getting-started), then run from the repository root:
+
+```bash
+python -m pytest tests -v
+```
+
+Use `-s` as well if you want to see the output printed by the tests:
+
+```bash
+python -m pytest tests -vs
+```
+
+### Continuous integration
+
+The workflow in `.github/workflows/tests.yml` runs the same command on every push to `master` and on every pull request. It installs the dependencies from `requirements.txt` on Python 3.12 and has read-only access to the repository. It only reports the result of the tests; it does not deploy anything. Deployment is handled separately by Render (see [Deployment](#deployment)).
 
 ## API contract
 
@@ -140,12 +153,13 @@ Done:
 - FastAPI application serving the health check and the frontend.
 - Pydantic schemas for the API contract, with validation.
 - Placeholder routers for the CV, offer, and profile endpoints.
+- pytest suite and a GitHub Actions workflow that runs it on every push and pull request.
 - Three-step frontend with profile review, offer input, and result view, running in demo mode.
 
 Next:
 
 1. Wire the placeholder endpoints to the schemas, so they validate requests and return fixed responses that match the contract.
-2. Align the frontend with the contract (route and status values), connect it to the backend, and add tests for every endpoint.
+2. Align the frontend with the contract (route and status values), connect it to the backend, and extend the tests to cover every endpoint.
 3. Implement real offer matching: requirement extraction, evidence retrieval, and a score calculated in code.
 4. Implement real CV extraction, validating size and file contents on the server.
 5. Add persistence, per-user data isolation, invitation codes, and a daily usage quota.
