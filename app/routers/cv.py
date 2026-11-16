@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, UploadFile
+from app.schemas import ProfileResponse
 
 router = APIRouter()
 
@@ -10,12 +11,12 @@ def delete_cv():
 def get_cv():
     return {"status": "ok GET cv"}
 
-@router.post("/cv", status_code=200)
-def post_cv():
+@router.post("/cv", response_model=ProfileResponse)
+def upload_cv(file: UploadFile):
     """
     Esto recibe un multipart con el archivo CV, extrae el perfil y no lo guarda
     """
-    return {"status": "ok POST cv"} 
+    pass
 
 @router.post("/cv/confirm", status_code=200)
 def post_cv():

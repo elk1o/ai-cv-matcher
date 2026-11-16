@@ -3,10 +3,6 @@
 // ---------------------------------------------------------------------------
 // Configuración
 // ---------------------------------------------------------------------------
-// true  -> datos ficticios, no se llama al backend.
-// false -> llama a los endpoints reales (mismo origen).
-const USE_MOCK = true;
-
 const LIMITS = {
   title: 200,
   detail: 2000,
@@ -98,11 +94,19 @@ function setBusy(value) {
 // ---------------------------------------------------------------------------
 // Capa de API
 // ---------------------------------------------------------------------------
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 async function request(path, options = {}) {
   const res = await fetch(path, options);
   if (!res.ok) {
+    let detail = null;
+    try {
+      detail = (await res.json()).detail;
+    } catch {
+      // la respuesta no trae JSON
+    }
+    // Los errores propios del backend (413, 415, 422, 502...) traen un mensaje en español.
+    // En un 500 no se muestra el detalle interno.
+    if (typeof detail === "string" && res.status !== 500) throw new Error(detail);
+
     let msg = `Error ${res.status}.`;
     if (res.status === 401) msg = "Código de acceso inválido.";
     else if (res.status === 422) msg = "Los datos enviados no son válidos. Revisa los límites de longitud.";
@@ -113,24 +117,8 @@ async function request(path, options = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-const MOCK_PROFILE = {
-  experience: [
-    { title: "Desarrollador backend — Empresa Ejemplo", detail: "2020-2024. APIs REST con Python y bases de datos relacionales." },
-    { title: "Desarrollador junior — Estudio Demo", detail: "2018-2020. Mantenimiento de aplicaciones web." },
-  ],
-  education: [{ title: "Grado en Informática — Universidad Ficticia", detail: "" }],
-  courses: [{ title: "Curso de bases de datos", detail: "40 horas" }],
-  skills: [{ title: "Python" }, { title: "SQL" }, { title: "Git" }].map((s) => ({ detail: "", ...s })),
-  languages: [{ title: "Inglés", detail: "B2" }],
-  achievements: [],
-};
-
 const api = {
   async uploadCv(file) {
-    if (USE_MOCK) {
-      await sleep(700);
-      return { profile: structuredClone(MOCK_PROFILE) };
-    }
     const body = new FormData();
     body.append("file", file);
     // Sin cabecera Content-Type: el navegador la genera con el boundary.
@@ -138,10 +126,6 @@ const api = {
   },
 
   async confirmProfile(p) {
-    if (USE_MOCK) {
-      await sleep(300);
-      return null;
-    }
     return request("/cv/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -150,18 +134,6 @@ const api = {
   },
 
   async analyzeOffer(offer) {
-    if (USE_MOCK) {
-      await sleep(900);
-      return {
-        score: 67,
-        requirements: [
-          { text: "Python", status: "OK", evidence: "Desarrollador backend — Empresa Ejemplo: APIs REST con Python" },
-          { text: "Bases de datos SQL", status: "OK", evidence: "Skill: SQL" },
-          { text: "Experiencia con Docker", status: "Partial", evidence: "Mencionas despliegues, pero no Docker de forma explícita" },
-          { text: "AWS", status: "KO", evidence: null },
-        ],
-      };
-    }
     return request("/offer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -170,10 +142,6 @@ const api = {
   },
 
   async deleteProfile() {
-    if (USE_MOCK) {
-      await sleep(300);
-      return null;
-    }
     return request("/profile", { method: "DELETE" });
   },
 };
@@ -197,24 +165,56 @@ function showStep(n) {
 // ---------------------------------------------------------------------------
 // Paso 1a: subida
 // ---------------------------------------------------------------------------
-function validateFile(file) {
+const DOC_MESSAGE = "Los archivos .doc (Word antiguo) no se admiten. Guárdalo como DOCX o PDF.";
+
+// Resultado de la última comprobación del archivo elegido (extensión, tamaño y contenido).
+let fileCheck = { file: null, ok: false };
+
+// Lee los primeros bytes para saber qué es el archivo de verdad, no lo que dice su nombre.
+// Es solo una ayuda para el usuario: la validación que cuenta es la del servidor.
+async function sniffFileType(file) {
+  const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  const startsWith = (...bytes) => bytes.every((b, i) => head[i] === b);
+  if (startsWith(0x25, 0x50, 0x44, 0x46)) return "pdf"; // %PDF
+  if (startsWith(0x50, 0x4b, 0x03, 0x04)) return "zip"; // PK.. (un DOCX es un ZIP)
+  if (startsWith(0xd0, 0xcf, 0x11, 0xe0)) return "doc"; // Word 97-2003
+  return null;
+}
+
+async function validateFile(file) {
   if (!file) return "Selecciona un archivo.";
   const name = file.name.toLowerCase();
-  if (!name.endsWith(".pdf") && !name.endsWith(".docx")) return "Solo se admiten archivos PDF o DOCX.";
-  if (file.size > LIMITS.fileBytes) return "El archivo supera los 5 MB.";
+  if (name.endsWith(".doc")) return DOC_MESSAGE;
+  const isPdf = name.endsWith(".pdf");
+  const isDocx = name.endsWith(".docx");
+  if (!isPdf && !isDocx) return "Solo se admiten archivos PDF o DOCX.";
   if (file.size === 0) return "El archivo está vacío.";
+  if (file.size > LIMITS.fileBytes) return "El archivo supera los 5 MB.";
+
+  const kind = await sniffFileType(file);
+  if (kind === "doc") return DOC_MESSAGE;
+  if (isPdf && kind !== "pdf") return "El archivo no es un PDF válido.";
+  if (isDocx && kind !== "zip") return "El archivo no es un DOCX válido.";
   return null;
 }
 
 function updateUploadButton() {
   const file = $("cv-file").files[0];
-  $("upload-btn").disabled = busy || !file || !$("consent").checked || validateFile(file) !== null;
+  const fileOk = Boolean(file) && fileCheck.file === file && fileCheck.ok;
+  $("upload-btn").disabled = busy || !fileOk || !$("consent").checked;
 }
 
-function onFileChange() {
+async function onFileChange() {
   const file = $("cv-file").files[0];
-  const error = file ? validateFile(file) : null;
+  fileCheck = { file, ok: false };
   const el = $("file-error");
+  el.hidden = true;
+  updateUploadButton();
+  if (!file) return;
+
+  const error = await validateFile(file);
+  if ($("cv-file").files[0] !== file) return; // el usuario eligió otro archivo mientras tanto
+  fileCheck = { file, ok: error === null };
   el.textContent = error || "";
   el.hidden = !error;
   updateUploadButton();
@@ -223,7 +223,7 @@ function onFileChange() {
 async function onUploadSubmit(event) {
   event.preventDefault();
   const file = $("cv-file").files[0];
-  if (busy || validateFile(file) !== null || !$("consent").checked) return;
+  if (busy || !file || fileCheck.file !== file || !fileCheck.ok || !$("consent").checked) return;
 
   clearMessage();
   setBusy(true);
@@ -420,6 +420,7 @@ function onBackToUpload() {
   profile = null;
   editing = null;
   $("cv-file").value = "";
+  fileCheck = { file: null, ok: false };
   $("file-error").hidden = true;
   $("review-phase").hidden = true;
   $("upload-phase").hidden = false;
@@ -529,7 +530,6 @@ async function onDelete() {
 // Arranque
 // ---------------------------------------------------------------------------
 function init() {
-  $("demo-banner").hidden = !USE_MOCK;
   $("cv-file").addEventListener("change", onFileChange);
   $("consent").addEventListener("change", updateUploadButton);
   $("upload-form").addEventListener("submit", onUploadSubmit);

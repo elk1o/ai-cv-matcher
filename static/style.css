@@ -52,14 +52,6 @@ body {
 .site-header { padding-top: 24px; }
 .site-header h1 { margin: 0; font-size: 1.6rem; }
 .tagline { margin: 4px 0 0; color: var(--muted); }
-.demo-banner {
-  margin: 12px 0 0;
-  padding: 8px 12px;
-  background: var(--partial-bg);
-  color: var(--partial);
-  border-radius: var(--radius);
-  font-size: .9rem;
-}
 
 /* Barra de pasos */
 .steps {
