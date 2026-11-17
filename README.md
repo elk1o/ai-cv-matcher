@@ -6,36 +6,58 @@ CV Matcher is a web application that compares a job offer with your CV. You uplo
 
 The backend is built with FastAPI and is designed to run its matching logic on LangChain and LangGraph. The frontend is a dependency-free single page served by the same FastAPI app, so the whole project is a single deployment.
 
-This project is in active development. The current version ships the FastAPI skeleton with placeholder endpoints, the Pydantic schemas of the API contract, a pytest suite that runs automatically on GitHub Actions, and a complete three-step frontend that runs in demo mode with fictional data; see [Project status](#project-status) for what works today and what comes next.
+This project is in active development. The current version can already read a PDF or DOCX CV and extract a structured profile from it with Gemini, let the user confirm it, and delete it. The offer analysis endpoint is still a placeholder; see [Project status](#project-status) for what works today and what comes next.
 
 ## What is included
 
 - A FastAPI application that serves a health check and the static frontend from a single URL.
 - Pydantic schemas for the API contract in `app/schemas.py`, with input validation (length limits, score range, allowed statuses).
-- Placeholder routers for the CV, offer, and profile endpoints, which return fixed responses and are not yet wired to the schemas.
-- A pytest suite in `tests/` and a GitHub Actions workflow that runs it on every push and pull request.
-- A three-step frontend written in plain HTML, CSS, and JavaScript:
+- **Real CV extraction** (`POST /cv`): the file type is detected from its content, the text is extracted from PDF (PyMuPDF) or DOCX (python-docx, including tables), and a Gemini model structures it into a profile through LangChain.
+- **Profile confirmation and deletion** (`POST /cv/confirm`, `DELETE /profile`), backed by a temporary in-memory store.
+- A placeholder router for the offer endpoint, which still returns a fixed response.
+- A pytest suite in `tests/` (CV extraction, endpoints, and schemas) and a GitHub Actions workflow that runs it on every push and pull request. The tests never call the LLM.
+- A three-step frontend written in plain HTML, CSS, and JavaScript, now connected to the backend:
   1. Upload a PDF or DOCX CV, then review the extracted profile and remove incorrect entries before confirming it.
   2. Paste the text of a job offer.
   3. Read the compatibility score and the requirement checklist with evidence.
-- A demo mode (`USE_MOCK`) that lets the full flow run without a backend, using fictional data.
 - A defined API contract between the frontend and the backend, described below.
+
+### CV extraction pipeline
+
+`POST /cv` runs three steps, each with its own error type so the router can answer with the right HTTP status:
+
+1. **Detect the file type by its magic bytes**, not by its name or extension. A PDF starts with `%PDF`; a DOCX is a ZIP that contains `word/document.xml`; old `.doc` files (OLE) are rejected with a clear message. Password-protected PDFs and corrupt files are rejected too.
+2. **Extract the text.** PDF blocks are sorted so two-column CVs read in order; DOCX paragraphs and tables keep the document order, and merged table cells are not duplicated. The text is truncated to 30,000 characters. A DOCX whose uncompressed size exceeds 50 MB is rejected before opening it (zip bomb protection).
+3. **Structure the text with the LLM.** The prompt lives in `app/prompts.py`. The model fills a limit-free draft schema (Gemini rejects schemas with many nested limits), and the limits of `Profile` are applied afterwards in code: long fields are truncated, entries without a title are dropped, and each section is capped at 50 entries.
+
+The service layer (`app/services/cv_extraction.py`) does not import FastAPI. It raises its own exceptions and the router translates them:
+
+| Exception | Meaning | HTTP status |
+|---|---|---|
+| `UnsupportedFileError` | Not a valid PDF/DOCX, `.doc`, corrupt, password-protected, or oversized DOCX | 415 |
+| `EmptyCVError` | The file has no extractable text (for example, a scanned PDF) | 422 |
+| `ModelQuotaError` | The shared Gemini quota or rate limit is exhausted | 503 |
+| `ExtractionError` | The model failed or returned an invalid profile | 502 |
+
+Uploads larger than 5 MB are rejected with `413`; the server reads at most 5 MB + 1 byte, so an oversized file is never fully loaded in memory.
 
 ## Design decisions
 
 - **The score is not computed by the LLM.** The plan is for the model to extract structured requirements from the offer and to judge each one against the profile, citing the exact profile entry. The percentage is then calculated in code from weighted requirements, so it is reproducible and explainable.
 - **The profile is stored as small entries, not raw text.** Each role, achievement, course, or skill is its own entry with metadata, which makes retrieval precise and citations exact.
 - **The user confirms the extracted profile.** Extraction errors would silently contaminate every later match, so only confirmed entries are used.
-- **Untrusted input is treated as untrusted.** Job offers and CV text can carry prompt injection. The frontend renders every backend value with `textContent`, never `innerHTML`.
-- **Privacy by design.** A CV is personal data: the original file is meant to be discarded after extraction, only confirmed entries are kept, and the frontend exposes a "Delete my data" action.
+- **Untrusted input is treated as untrusted.** Job offers and CV text can carry prompt injection. The CV text is sent between `<cv>` tags and the prompt tells the model to treat it as data, and the frontend renders every backend value with `textContent`, never `innerHTML`.
+- **Privacy by design.** A CV is personal data: the original file is never stored, extraction does not save anything (the user must confirm first), error messages never include the CV text, and the frontend exposes a "Delete my data" action. The prompt also tells the model to leave out contact data (name, email, phone, address).
+- **Limits are enforced in code, not trusted to the LLM.** Oversized fields are truncated instead of rejected, because a 201-character title does not justify an error.
+- **Quota errors are not the user's fault.** When the shared Gemini quota is exhausted the API answers `503`, not `429`, with a generic message; the provider's details are only logged.
 
 ## Technology
 
-Python, FastAPI, Uvicorn, Pydantic, `python-multipart` for file uploads, pytest and HTTPX for tests, GitHub Actions for continuous integration, and vanilla HTML, CSS, and JavaScript for the frontend. LangChain, LangGraph, and a vector store are planned for the matching logic. The pinned dependency versions are listed in [requirements.txt](requirements.txt).
+Python, FastAPI, Uvicorn, Pydantic, `python-multipart` for file uploads, PyMuPDF and python-docx to read CVs, LangChain with `langchain-google-genai` (Gemini) for the extraction, pytest and HTTPX for tests, GitHub Actions for continuous integration, and vanilla HTML, CSS, and JavaScript for the frontend. LangGraph and a vector store are planned for the matching logic. The pinned dependency versions are listed in [requirements.txt](requirements.txt).
 
 ## Repository structure
 
-Placeholder routers return fixed responses and do not use the schemas yet.
+The offer router is still a placeholder and returns fixed responses.
 
 ```text
 .
@@ -46,16 +68,23 @@ Placeholder routers return fixed responses and do not use the schemas yet.
 │   ├── __init__.py
 │   ├── main.py            # app creation, routers, static files mounted last
 │   ├── schemas.py         # Pydantic models for the API contract
-│   └── routers/
+│   ├── prompts.py         # system prompt for the CV extraction
+│   ├── routers/
+│   │   ├── __init__.py
+│   │   ├── cv.py          # POST /cv and POST /cv/confirm
+│   │   ├── offer.py       # /offer (placeholder responses)
+│   │   └── profile.py     # DELETE /profile
+│   └── services/
 │       ├── __init__.py
-│       ├── cv.py          # /cv and /cv/confirm (placeholder responses)
-│       ├── offer.py       # /offer (placeholder responses)
-│       └── profile.py     # DELETE /profile (placeholder response)
+│       ├── cv_extraction.py  # file detection, text extraction, LLM structuring
+│       └── profile_store.py  # temporary in-memory store of the confirmed profile
 ├── static/
 │   ├── index.html
 │   ├── style.css
 │   └── app.js
-├── tests/                 # pytest tests
+├── tests/
+│   ├── test_cv.py         # extraction, /cv, /cv/confirm and /profile
+│   └── test_schemas.py    # schema validation
 ├── .gitignore
 ├── LICENSE
 ├── requirements.txt
@@ -74,7 +103,14 @@ python -m pip install -r requirements.txt
 
 On Windows PowerShell, activate the environment with `.venv\Scripts\Activate.ps1`.
 
-The current version needs no API keys. Configuration and credentials for the LLM provider will be added when the matching logic is implemented; do not commit `.env` or any credentials.
+CV extraction calls Gemini, so the backend needs two environment variables. Put them in a `.env` file at the repository root (it is loaded at startup and ignored by git) or export them in your shell:
+
+```text
+GEMINI_MODEL=<name of the Gemini model to use>
+GOOGLE_API_KEY=<your Google AI API key>
+```
+
+If `GEMINI_MODEL` is missing, `POST /cv` fails when it reaches the LLM step. The tests do not need either variable. Do not commit `.env` or any credentials.
 
 ## Running the application
 
@@ -92,9 +128,7 @@ Then open:
 
 The static files are mounted last in `app/main.py` on purpose: a mount on `/` would otherwise capture every route registered after it.
 
-### Demo mode
-
-`static/app.js` starts with `const USE_MOCK = true;`. In this mode the frontend never calls the backend and shows fictional data, and a banner tells the user so. Set it to `false` once the endpoints below are implemented and the frontend is aligned with them (see the notes after the table in [API contract](#api-contract)).
+The frontend talks to the real backend: the former demo mode with fictional data (`USE_MOCK`) is gone. Until offer matching is implemented, step 3 (`POST /offer`) only receives the placeholder response.
 
 ## Running tests
 
@@ -110,13 +144,15 @@ Use `-s` as well if you want to see the output printed by the tests:
 python -m pytest tests -vs
 ```
 
+The CV tests build PDF and DOCX files in memory and replace the LLM with a fake chain (using pytest's `monkeypatch`), so they are deterministic, need no network or API key, and consume no quota. They cover file detection, text extraction (tables, merged cells, document order, truncation, zip bombs), the limits applied to the model output, error wrapping, and every status code of the CV endpoints.
+
 ### Continuous integration
 
 The workflow in `.github/workflows/tests.yml` runs the same command on every push to `master` and on every pull request. It installs the dependencies from `requirements.txt` on Python 3.12 and has read-only access to the repository. It only reports the result of the tests; it does not deploy anything. Deployment is handled separately by Render (see [Deployment](#deployment)).
 
 ## API contract
 
-This is the contract defined by the schemas in `app/schemas.py` (`ProfileResponse`, `ProfileConfirmRequest`, `OfferRequest`, `OfferResponse`). The endpoints are implemented first with fixed responses, so the interface can be tested end to end, and are then replaced with real logic.
+This is the contract defined by the schemas in `app/schemas.py` (`ProfileResponse`, `ProfileConfirmRequest`, `OfferRequest`, `OfferResponse`). `POST /cv`, `POST /cv/confirm`, and `DELETE /profile` are implemented; `POST /offer` still returns a fixed response.
 
 | Action | Endpoint | Request | Response |
 |---|---|---|---|
@@ -129,11 +165,19 @@ A profile has the sections `experience`, `education`, `courses`, `skills`, `lang
 
 The offer text must be between 10 and 8000 characters. The response `score` is an integer from 0 to 100. Each requirement is `{"text": "...", "status": "...", "evidence": "..."}`, where `status` is `OK`, `Partial`, or `KO`, and `evidence` is optional and `null` when the profile has nothing to support the requirement.
 
-Pending alignment between the frontend and the backend:
+Error responses of `POST /cv` (the `detail` message is in Spanish, since the user sees it):
 
-- The frontend still calls `POST /match`, while the backend route is `POST /offer`.
-- The frontend and its demo data still use the statuses `cumple`, `parcial`, and `no_cumple` instead of `OK`, `Partial`, and `KO`.
-- The placeholder routers also expose `GET /cv` and `GET /offer`, which are not part of the contract.
+| Status | When |
+|---|---|
+| `413` | The file is larger than 5 MB |
+| `415` | The file is not a valid PDF or DOCX (also `.doc`, corrupt, password-protected) |
+| `422` | The file has no extractable text, or the `file` field is missing |
+| `502` | The model failed or returned an invalid profile |
+| `503` | The shared model quota is exhausted |
+
+`POST /cv/confirm` answers `422` if any entry is invalid (for example, an empty title) and stores nothing. Confirmed profiles are kept in memory under a single anonymous user, so they are lost on restart.
+
+Pending: the placeholder offer router still exposes `GET /offer`, which is not part of the contract.
 
 ## Deployment
 
@@ -152,17 +196,15 @@ Done:
 
 - FastAPI application serving the health check and the frontend.
 - Pydantic schemas for the API contract, with validation.
-- Placeholder routers for the CV, offer, and profile endpoints.
-- pytest suite and a GitHub Actions workflow that runs it on every push and pull request.
-- Three-step frontend with profile review, offer input, and result view, running in demo mode.
+- Real CV extraction: server-side validation of size and file contents, PDF and DOCX text extraction, and structuring with Gemini.
+- `POST /cv/confirm` and `DELETE /profile`, with a temporary in-memory store.
+- Frontend aligned with the contract (route and `OK`/`Partial`/`KO` statuses) and connected to the backend.
+- pytest suite (81 tests) and a GitHub Actions workflow that runs it on every push and pull request.
 
 Next:
 
-1. Wire the placeholder endpoints to the schemas, so they validate requests and return fixed responses that match the contract.
-2. Align the frontend with the contract (route and status values), connect it to the backend, and extend the tests to cover every endpoint.
-3. Implement real offer matching: requirement extraction, evidence retrieval, and a score calculated in code.
-4. Implement real CV extraction, validating size and file contents on the server.
-5. Add persistence, per-user data isolation, invitation codes, and a daily usage quota.
+1. Implement real offer matching: requirement extraction, evidence retrieval, and a score calculated in code.
+2. Add persistence, per-user data isolation, invitation codes, and a daily usage quota.
 
 ## Author
 
