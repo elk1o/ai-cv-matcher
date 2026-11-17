@@ -89,13 +89,84 @@ function setBusy(value) {
   updateOfferButton();
   $("confirm-btn").disabled = value || editing !== null;
   $("delete-btn").disabled = value;
+  // Evita cambiar el archivo o la oferta mientras la petición está en curso.
+  $("cv-file").disabled = value;
+  $("consent").disabled = value;
+  $("offer-text").readOnly = value;
+  $("example-btn").disabled = value;
+}
+
+// ---------------------------------------------------------------------------
+// Indicador de carga
+// ---------------------------------------------------------------------------
+// Los mensajes dependen del tiempo transcurrido: el servidor no informa del progreso
+// real, así que no se muestra ningún porcentaje (sería inventado).
+const LOADING_STEPS = {
+  cv: [
+    [0, "Leyendo tu CV…"],
+    [15, "Extrayendo el texto del documento…"],
+    [30, "Organizando tu perfil por secciones…"],
+    [60, "Casi listo. Puede tardar minutos"],
+    [100, "Está tardando más de lo habitual. Sigue en marcha…"],
+  ],
+  offer: [
+    [0, "Leyendo la oferta…"],
+    [15, "Identificando los requisitos…"],
+    [30, "Comparándolos con tu perfil…"],
+    [60, "Casi listo. Puede tardar minutos"],
+    [100, "Está tardando más de lo habitual. Sigue en marcha…"],
+  ],
+};
+
+// Muestra el indicador dentro de `container` y devuelve la función que lo detiene.
+function startLoading(container, steps) {
+  const label = h("span", { class: "loading-label" }, steps[0][1]);
+  const time = h("span", { class: "loading-time", "aria-hidden": "true" }, "0 s");
+  container.replaceChildren(
+    h("div", { class: "spinner", "aria-hidden": "true" }),
+    h("div", { class: "loading-text" }, label, time, h("div", { class: "loading-bar", "aria-hidden": "true" })),
+  );
+  container.hidden = false;
+
+  const startedAt = Date.now();
+  const tick = () => {
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    time.textContent = `${seconds} s`;
+    const current = steps.filter(([from]) => seconds >= from).at(-1)[1];
+    // Solo se escribe si cambia, para que un lector de pantalla no repita el aviso.
+    if (label.textContent !== current) label.textContent = current;
+  };
+  const timerId = setInterval(tick, 1000);
+
+  return () => {
+    clearInterval(timerId);
+    container.hidden = true;
+    container.replaceChildren();
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Capa de API
 // ---------------------------------------------------------------------------
+const SLOW_TIMEOUT_MS = 120_000; // extracción del CV y análisis de la oferta (llaman al LLM)
+
 async function request(path, options = {}) {
-  const res = await fetch(path, options);
+  const { timeoutMs = 30_000, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let res;
+  try {
+    res = await fetch(path, { ...fetchOptions, signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("La operación ha tardado demasiado. Inténtalo de nuevo.");
+    }
+    throw new Error("No se ha podido conectar con el servidor. Comprueba tu conexión.");
+  } finally {
+    clearTimeout(timer);
+  }
+
   if (!res.ok) {
     let detail = null;
     try {
@@ -122,7 +193,7 @@ const api = {
     const body = new FormData();
     body.append("file", file);
     // Sin cabecera Content-Type: el navegador la genera con el boundary.
-    return request("/cv", { method: "POST", body });
+    return request("/cv", { method: "POST", body, timeoutMs: SLOW_TIMEOUT_MS });
   },
 
   async confirmProfile(p) {
@@ -138,6 +209,7 @@ const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ offer }),
+      timeoutMs: SLOW_TIMEOUT_MS,
     });
   },
 
@@ -228,6 +300,7 @@ async function onUploadSubmit(event) {
   clearMessage();
   setBusy(true);
   $("upload-btn").textContent = "Extrayendo…";
+  const stopLoading = startLoading($("upload-loading"), LOADING_STEPS.cv);
   try {
     const data = await api.uploadCv(file);
     profile = normalizeProfile(data.profile);
@@ -238,6 +311,7 @@ async function onUploadSubmit(event) {
   } catch (err) {
     showMessage(err.message, true);
   } finally {
+    stopLoading();
     $("upload-btn").textContent = "Extraer mi perfil";
     setBusy(false);
   }
@@ -449,6 +523,7 @@ async function onOfferSubmit(event) {
   clearMessage();
   setBusy(true);
   $("offer-btn").textContent = "Analizando…";
+  const stopLoading = startLoading($("offer-loading"), LOADING_STEPS.offer);
   try {
     const result = await api.analyzeOffer(offer);
     renderResult(result);
@@ -456,6 +531,7 @@ async function onOfferSubmit(event) {
   } catch (err) {
     showMessage(err.message, true);
   } finally {
+    stopLoading();
     $("offer-btn").textContent = "Analizar oferta";
     setBusy(false);
   }

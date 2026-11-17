@@ -201,6 +201,55 @@ input:focus-visible, textarea:focus-visible, button:focus-visible {
 .badge.ko { background: var(--ko-bg); color: var(--ko); }
 .evidence { margin: 6px 0 0; color: var(--muted); font-size: .92rem; overflow-wrap: anywhere; }
 
+/* Indicador de carga */
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.spinner {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin .9s linear infinite;
+}
+.loading-text { min-width: 0; flex: 1; }
+.loading-label { display: block; font-weight: 600; }
+.loading-time { display: block; color: var(--muted); font-size: .85rem; }
+.loading-bar {
+  height: 4px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.loading-bar::after {
+  content: "";
+  display: block;
+  width: 35%;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--primary);
+  animation: slide 1.4s ease-in-out infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(290%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner, .loading-bar::after { animation: none; }
+  .loading-bar::after { width: 100%; opacity: .5; }
+}
+
 .site-footer { padding-bottom: 32px; text-align: center; }
 
 @media (max-width: 520px) {
