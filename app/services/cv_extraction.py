@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 MAX_TEXT_CHARS = 30_000                      # max text length sent to the LLM
 MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024    # max uncompressed DOCX size (anti zip bomb)
 
+# LLM call settings. langchain-google-genai retries up to 6 times by default, and every retry
+# is another request against the quota, so keep it low.
+LLM_MAX_RETRIES = 1
+LLM_TIMEOUT_SECONDS = 90
+
 # Limits of Profile (app/schemas.py). Keep in sync: if they change there, change them here.
 MAX_TITLE_CHARS = 200
 MAX_DETAIL_CHARS = 2000
@@ -31,8 +36,9 @@ MAX_ENTRIES_PER_SECTION = 50
 
 PDF_MAGIC = b"%PDF"
 ZIP_MAGIC = b"PK\x03\x04"
-OLE_MAGIC = b"\xd0\xcf\x11\xe0"  # Word 97-2003 (.doc)
+OLE_MAGIC = b"\xd0\xcf\x11\xe0" # Word 97-2003 (.doc)
 
+QUOTA_MESSAGE = "El servicio ha alcanzado su límite de uso. Inténtalo de nuevo más tarde."
 DOC_MESSAGE = "Los archivos .doc (Word antiguo) no se admiten. Guárdalo como DOCX o PDF."
 
 class _EntryDraft(BaseModel):
@@ -164,7 +170,7 @@ def _build_chain():
     prompt = ChatPromptTemplate.from_messages(
         [("system", CV_EXTRACTION_SYSTEM_PROMPT), ("human", "<cv>\n{cv_text}\n</cv>")]
     )
-    llm = ChatGoogleGenerativeAI(model=model)
+    llm = ChatGoogleGenerativeAI(model=model, max_retries=LLM_MAX_RETRIES, timeout=LLM_TIMEOUT_SECONDS)
     return prompt | llm.with_structured_output(_ProfileDraft)
 
 
@@ -197,9 +203,7 @@ def structure_profile(text: str) -> Profile:
         # Must go before `except Exception`: Python uses the first clause that matches.
         # The provider message (model, project, quota URLs) is logged, never sent to the user.
         logger.warning("Model quota exceeded: %s", type(exc).__name__)
-        raise ModelQuotaError(
-            "El servicio ha alcanzado su límite de uso. Inténtalo de nuevo más tarde."
-        ) from exc
+        raise ModelQuotaError(QUOTA_MESSAGE) from exc
     except Exception as exc:
         # Invalid output, network or quota failure...
         # The CV text is deliberately left out of the message (personal data).
