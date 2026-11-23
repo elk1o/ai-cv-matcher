@@ -46,7 +46,7 @@ const STATUS = {
 // ---------------------------------------------------------------------------
 // Estado
 // ---------------------------------------------------------------------------
-let profile = null;     // perfil en revisión o confirmado
+let profile = null;     // perfil en revisión (se usará en el paso 3, cuando el grafo pida revisión humana)
 let editing = null;     // { section, index } ; index === null => entrada nueva
 let busy = false;
 
@@ -87,7 +87,9 @@ function setBusy(value) {
   document.body.style.cursor = value ? "progress" : "";
   updateUploadButton();
   updateOfferButton();
-  $("confirm-btn").disabled = value || editing !== null;
+  $("start-btn").disabled = value;
+  $("back-cv-btn").disabled = value;
+  $("back-offer-btn").disabled = value;
   $("delete-btn").disabled = value;
   // Evita cambiar el archivo o la oferta mientras la petición está en curso.
   $("cv-file").disabled = value;
@@ -102,19 +104,12 @@ function setBusy(value) {
 // Los mensajes dependen del tiempo transcurrido: el servidor no informa del progreso
 // real, así que no se muestra ningún porcentaje (sería inventado).
 const LOADING_STEPS = {
-  cv: [
-    [0, "Leyendo tu CV…"],
-    [15, "Extrayendo el texto del documento…"],
-    [30, "Organizando tu perfil por secciones…"],
-    [60, "Casi listo. Puede tardar minutos"],
-    [100, "Está tardando más de lo habitual. Sigue en marcha…"],
-  ],
-  offer: [
-    [0, "Leyendo la oferta…"],
-    [15, "Identificando los requisitos…"],
-    [30, "Comparándolos con tu perfil…"],
-    [60, "Casi listo. Puede tardar minutos"],
-    [100, "Está tardando más de lo habitual. Sigue en marcha…"],
+  match: [
+    [0, "Leyendo tu CV y la oferta…"],
+    [15, "Extrayendo tu perfil y los requisitos…"],
+    [30, "Comparando tu perfil con cada requisito…"],
+    [60, "Casi listo. Puede tardar hasta un minuto…"],
+    [120, "Está tardando más de lo habitual. Sigue en marcha…"],
   ],
 };
 
@@ -148,7 +143,7 @@ function startLoading(container, steps) {
 // ---------------------------------------------------------------------------
 // Capa de API
 // ---------------------------------------------------------------------------
-const SLOW_TIMEOUT_MS = 120_000; // extracción del CV y análisis de la oferta (llaman al LLM)
+const SLOW_TIMEOUT_MS = 120_000; // análisis del paso 3 (el grafo llama varias veces al LLM)
 
 async function request(path, options = {}) {
   const { timeoutMs = 30_000, ...fetchOptions } = options;
@@ -189,30 +184,29 @@ async function request(path, options = {}) {
 }
 
 const api = {
+  // Paso 1: el backend valida el archivo y guarda su texto. No llama al LLM.
   async uploadCv(file) {
     const body = new FormData();
     body.append("file", file);
     // Sin cabecera Content-Type: el navegador la genera con el boundary.
-    return request("/cv", { method: "POST", body, timeoutMs: SLOW_TIMEOUT_MS });
+    return request("/cv", { method: "POST", body });
   },
 
-  async confirmProfile(p) {
-    return request("/cv/confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profile: p }),
-    });
-  },
-
-  async analyzeOffer(offer) {
+  // Paso 2: el backend valida la oferta y guarda su texto. No llama al LLM.
+  async uploadOffer(offer) {
     return request("/offer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ offer }),
-      timeoutMs: SLOW_TIMEOUT_MS,
     });
   },
 
+  // Paso 3: lanza el grafo con el CV y la oferta ya guardados.
+  async startMatch() {
+    return request("/match", { method: "POST", timeoutMs: SLOW_TIMEOUT_MS });
+  },
+
+  // Borra el CV, la oferta y el perfil del usuario.
   async deleteProfile() {
     return request("/profile", { method: "DELETE" });
   },
@@ -235,7 +229,7 @@ function showStep(n) {
 }
 
 // ---------------------------------------------------------------------------
-// Paso 1a: subida
+// Paso 1: subir el CV
 // ---------------------------------------------------------------------------
 const DOC_MESSAGE = "Los archivos .doc (Word antiguo) no se admiten. Guárdalo como DOCX o PDF.";
 
@@ -299,20 +293,15 @@ async function onUploadSubmit(event) {
 
   clearMessage();
   setBusy(true);
-  $("upload-btn").textContent = "Extrayendo…";
-  const stopLoading = startLoading($("upload-loading"), LOADING_STEPS.cv);
+  $("upload-btn").textContent = "Subiendo…";
   try {
     const data = await api.uploadCv(file);
-    profile = normalizeProfile(data.profile);
-    editing = null;
-    $("upload-phase").hidden = true;
-    $("review-phase").hidden = false;
-    renderReview();
+    showStep(2);
+    showMessage(`CV cargado (${data.characters} caracteres de texto).`);
   } catch (err) {
     showMessage(err.message, true);
   } finally {
-    stopLoading();
-    $("upload-btn").textContent = "Extraer mi perfil";
+    $("upload-btn").textContent = "Subir CV";
     setBusy(false);
   }
 }
@@ -329,7 +318,8 @@ function normalizeProfile(p) {
 }
 
 // ---------------------------------------------------------------------------
-// Paso 1b: revisión (HITL): editar, añadir y quitar
+// Revisión humana (HITL): editar, añadir y quitar
+// Todavía no está conectada: la usará el paso 3 cuando el grafo se detenga a pedir revisión.
 // ---------------------------------------------------------------------------
 function totalEntries() {
   return SECTIONS.reduce((sum, [key]) => sum + profile[key].length, 0);
@@ -466,40 +456,25 @@ function renderReview() {
     : total === 0
       ? "El perfil está vacío. Añade al menos una entrada para continuar."
       : `${total} entradas en total.`;
-  $("confirm-btn").disabled = busy || editing !== null || total === 0;
 
   const firstInput = container.querySelector(".entry-form input");
   if (firstInput) firstInput.focus();
 }
 
-async function onConfirm() {
-  if (busy || editing !== null || totalEntries() === 0) return;
-  clearMessage();
-  setBusy(true);
-  $("confirm-btn").textContent = "Guardando…";
-  try {
-    await api.confirmProfile(profile);
-    showMessage("Perfil confirmado y guardado.");
-    showStep(2);
-  } catch (err) {
-    showMessage(err.message, true);
-  } finally {
-    $("confirm-btn").textContent = "Confirmar perfil";
-    setBusy(false);
-    renderReview();
-  }
-}
-
-function onBackToUpload() {
+// Vuelve al paso 1 y limpia el formulario del CV.
+function resetUploadForm() {
   profile = null;
   editing = null;
   $("cv-file").value = "";
   fileCheck = { file: null, ok: false };
   $("file-error").hidden = true;
-  $("review-phase").hidden = true;
-  $("upload-phase").hidden = false;
   updateUploadButton();
+}
+
+function onBackToCv() {
   clearMessage();
+  resetUploadForm();
+  showStep(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -522,24 +497,49 @@ async function onOfferSubmit(event) {
 
   clearMessage();
   setBusy(true);
-  $("offer-btn").textContent = "Analizando…";
-  const stopLoading = startLoading($("offer-loading"), LOADING_STEPS.offer);
+  $("offer-btn").textContent = "Guardando…";
   try {
-    const result = await api.analyzeOffer(offer);
-    renderResult(result);
+    await api.uploadOffer(offer);
+    resetStep3();
     showStep(3);
   } catch (err) {
     showMessage(err.message, true);
   } finally {
-    stopLoading();
-    $("offer-btn").textContent = "Analizar oferta";
+    $("offer-btn").textContent = "Continuar";
     setBusy(false);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Paso 3: resultado
+// Paso 3: análisis (el grafo del backend) y resultado
 // ---------------------------------------------------------------------------
+// Estado inicial del paso 3: botón de inicio visible, sin revisión ni resultado.
+function resetStep3() {
+  $("start-phase").hidden = false;
+  $("review-phase").hidden = true;
+  $("result").hidden = true;
+}
+
+async function onStartMatch() {
+  if (busy) return;
+  clearMessage();
+  setBusy(true);
+  $("start-btn").textContent = "Analizando…";
+  const stopLoading = startLoading($("match-loading"), LOADING_STEPS.match);
+  try {
+    const result = await api.startMatch();
+    renderResult(result);
+    $("start-phase").hidden = true;
+    $("result").hidden = false;
+  } catch (err) {
+    showMessage(err.message, true);
+  } finally {
+    stopLoading();
+    $("start-btn").textContent = "Iniciar análisis";
+    setBusy(false);
+  }
+}
+
 function renderResult(result) {
   const score = Math.max(0, Math.min(100, Number(result.score) || 0));
   $("score-value").textContent = `${score}%`;
@@ -576,6 +576,12 @@ function onAnotherOffer() {
   $("offer-text").value = "";
   updateOfferButton();
   clearMessage();
+  resetStep3();
+  showStep(2);
+}
+
+function onBackToOffer() {
+  clearMessage();
   showStep(2);
 }
 
@@ -584,12 +590,13 @@ function onAnotherOffer() {
 // ---------------------------------------------------------------------------
 async function onDelete() {
   if (busy) return;
-  if (!window.confirm("Se borrarán tu perfil y tus datos. Esta acción no se puede deshacer. ¿Continuar?")) return;
+  if (!window.confirm("Se borrarán tu CV, la oferta y tu perfil. Esta acción no se puede deshacer. ¿Continuar?")) return;
   clearMessage();
   setBusy(true);
   try {
     await api.deleteProfile();
-    onBackToUpload();
+    resetUploadForm();
+    resetStep3();
     $("consent").checked = false;
     $("offer-text").value = "";
     updateOfferButton();
@@ -609,11 +616,12 @@ function init() {
   $("cv-file").addEventListener("change", onFileChange);
   $("consent").addEventListener("change", updateUploadButton);
   $("upload-form").addEventListener("submit", onUploadSubmit);
-  $("confirm-btn").addEventListener("click", onConfirm);
-  $("back-upload-btn").addEventListener("click", onBackToUpload);
   $("offer-text").addEventListener("input", updateOfferButton);
   $("offer-form").addEventListener("submit", onOfferSubmit);
   $("example-btn").addEventListener("click", onUseExample);
+  $("back-cv-btn").addEventListener("click", onBackToCv);
+  $("back-offer-btn").addEventListener("click", onBackToOffer);
+  $("start-btn").addEventListener("click", onStartMatch);
   $("another-btn").addEventListener("click", onAnotherOffer);
   $("delete-btn").addEventListener("click", onDelete);
   updateUploadButton();

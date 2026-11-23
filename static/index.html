@@ -16,45 +16,31 @@
     <ol class="steps" id="steps">
       <li data-step="1"><span class="step-num">1</span><span class="step-label">Tu CV</span></li>
       <li data-step="2"><span class="step-num">2</span><span class="step-label">Oferta</span></li>
-      <li data-step="3"><span class="step-num">3</span><span class="step-label">Resultado</span></li>
+      <li data-step="3"><span class="step-num">3</span><span class="step-label">Análisis</span></li>
     </ol>
   </nav>
 
   <main>
     <p id="message" class="message" role="status" aria-live="polite" hidden></p>
 
-    <!-- PASO 1 -->
+    <!-- PASO 1: subir el CV (solo se valida y se guarda su texto) -->
     <section id="step-1" data-step="1" aria-labelledby="h-step-1">
       <h2 id="h-step-1">1. Sube tu CV</h2>
+      <form id="upload-form" novalidate>
+        <label class="field-label" for="cv-file">Archivo (PDF o DOCX, máximo 5 MB)</label>
+        <input id="cv-file" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+        <p id="file-error" class="field-error" hidden></p>
 
-      <div id="upload-phase">
-        <form id="upload-form" novalidate>
-          <label class="field-label" for="cv-file">Archivo (PDF o DOCX, máximo 5 MB)</label>
-          <input id="cv-file" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
-          <p id="file-error" class="field-error" hidden></p>
+        <label class="check">
+          <input id="consent" type="checkbox">
+          <span>Acepto que mi CV se guarde temporalmente y que en el análisis se envíe a un modelo de IA (Google Gemini). Podré revisar lo que se extraiga y borrar mis datos cuando quiera.</span>
+        </label>
 
-          <label class="check">
-            <input id="consent" type="checkbox">
-            <span>Acepto que mi CV se procese para extraer mi perfil. Podré revisarlo antes de guardarlo y borrar mis datos cuando quiera.</span>
-          </label>
-
-          <button id="upload-btn" class="btn primary" type="submit" disabled>Extraer mi perfil</button>
-          <div id="upload-loading" class="loading" role="status" hidden></div>
-        </form>
-      </div>
-
-      <div id="review-phase" hidden>
-        <p class="hint">Revisa lo que hemos extraído. Puedes editar, quitar o añadir entradas. No se guarda nada hasta que confirmes.</p>
-        <div id="review-sections"></div>
-        <p id="review-summary" class="hint"></p>
-        <div class="actions">
-          <button id="back-upload-btn" class="btn" type="button">Subir otro CV</button>
-          <button id="confirm-btn" class="btn primary" type="button">Confirmar perfil</button>
-        </div>
-      </div>
+        <button id="upload-btn" class="btn primary" type="submit" disabled>Subir CV</button>
+      </form>
     </section>
 
-    <!-- PASO 2 -->
+    <!-- PASO 2: pegar la oferta (solo se valida y se guarda su texto) -->
     <section id="step-2" data-step="2" aria-labelledby="h-step-2" hidden>
       <h2 id="h-step-2">2. Pega la oferta</h2>
       <form id="offer-form" novalidate>
@@ -62,27 +48,47 @@
         <textarea id="offer-text" rows="12" maxlength="8000" placeholder="Ejemplo (ficticio):&#10;&#10;Desarrollador/a Backend Python — Empresa Ejemplo S.L.&#10;&#10;Buscamos una persona para incorporarse a nuestro equipo de producto.&#10;&#10;Requisitos:&#10;- 3+ años de experiencia con Python&#10;- Conocimientos de FastAPI o Django&#10;- SQL y bases de datos relacionales&#10;- Git y trabajo con control de versiones&#10;- Inglés B2&#10;&#10;Valorable: Docker, AWS, tests automatizados.&#10;&#10;Pega aquí la descripción completa de tu oferta."></textarea>
         <p id="offer-counter" class="counter">0 / 8000</p>
         <div class="actions">
+          <button id="back-cv-btn" class="btn" type="button">Cambiar CV</button>
           <button id="example-btn" class="btn" type="button">Usar oferta de ejemplo</button>
-          <button id="offer-btn" class="btn primary" type="submit" disabled>Analizar oferta</button>
+          <button id="offer-btn" class="btn primary" type="submit" disabled>Continuar</button>
         </div>
-        <div id="offer-loading" class="loading" role="status" hidden></div>
       </form>
     </section>
 
-    <!-- PASO 3 -->
+    <!-- PASO 3: análisis (grafo multiagente en el backend: extracción, revisión humana y match) -->
     <section id="step-3" data-step="3" aria-labelledby="h-step-3" hidden>
-      <h2 id="h-step-3">3. Resultado</h2>
-      <div class="score-card">
-        <p class="score-label">Compatibilidad</p>
-        <p id="score-value" class="score-value">0%</p>
-        <div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Compatibilidad" id="score-meter">
-          <div id="score-fill" class="meter-fill"></div>
+      <h2 id="h-step-3">3. Análisis</h2>
+
+      <div id="start-phase">
+        <p class="hint">Tu CV y la oferta están cargados. El análisis extrae tu perfil y los requisitos de la oferta, y después los compara. Puede tardar cerca de un minuto.</p>
+        <div class="actions">
+          <button id="back-offer-btn" class="btn" type="button">Cambiar oferta</button>
+          <button id="start-btn" class="btn primary" type="button">Iniciar análisis</button>
         </div>
+        <div id="match-loading" class="loading" role="status" hidden></div>
       </div>
-      <h3>Requisitos</h3>
-      <ul id="requirements" class="requirements"></ul>
-      <div class="actions">
-        <button id="another-btn" class="btn primary" type="button">Analizar otra oferta</button>
+
+      <!-- Revisión humana (HITL). Todavía no está conectada: se usará cuando el grafo se detenga
+           para que el usuario corrija el perfil y los requisitos. renderReview() ya existe en app.js. -->
+      <div id="review-phase" hidden>
+        <p class="hint">Revisa lo que se ha extraído. Puedes editar, quitar o añadir entradas.</p>
+        <div id="review-sections"></div>
+        <p id="review-summary" class="hint"></p>
+      </div>
+
+      <div id="result" hidden>
+        <div class="score-card">
+          <p class="score-label">Compatibilidad</p>
+          <p id="score-value" class="score-value">0%</p>
+          <div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Compatibilidad" id="score-meter">
+            <div id="score-fill" class="meter-fill"></div>
+          </div>
+        </div>
+        <h3>Requisitos</h3>
+        <ul id="requirements" class="requirements"></ul>
+        <div class="actions">
+          <button id="another-btn" class="btn primary" type="button">Analizar otra oferta</button>
+        </div>
       </div>
     </section>
   </main>
