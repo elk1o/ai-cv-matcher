@@ -34,3 +34,6 @@ class OfferRequirement(BaseModel):
 class OfferResponse(BaseModel):
     score: int = Field(ge=0, le=100)
     requirements: list[OfferRequirement]
+
+class UploadResponse(BaseModel):
+    characters: int

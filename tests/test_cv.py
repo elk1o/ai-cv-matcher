@@ -5,16 +5,16 @@ import docx
 import pymupdf
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.exceptions import ModelRateLimitError
+from langchain_core.exceptions import ModelRateLimitError  # NEW (review)
 
 from app.main import app
-from app.schemas import Profile, ProfileEntry
-from app.services import cv_extraction, profile_store
+from app.schemas import Profile
+from app.services import cv_extraction, document_store, profile_store  # NEW (review): document_store
 from app.services.cv_extraction import (
     MAX_TEXT_CHARS,
     EmptyCVError,
     ExtractionError,
-    ModelQuotaError,
+    ModelQuotaError,  # NEW (review)
     UnsupportedFileError,
     _EntryDraft,
     _ProfileDraft,
@@ -53,10 +53,6 @@ def make_docx(paragraphs=(), table_rows=(), merge_first_row=False) -> bytes:
     return buffer.getvalue()
 
 
-def fake_profile(_text: str) -> Profile:
-    return Profile(skills=[ProfileEntry(title="Python")])
-
-
 def post_cv(content: bytes, name="cv.pdf"):
     return client.post("/cv", files={"file": (name, content, "application/octet-stream")})
 
@@ -64,8 +60,12 @@ def post_cv(content: bytes, name="cv.pdf"):
 @pytest.fixture(autouse=True)
 def clean_store():
     profile_store._profiles.clear()
+    document_store._cv_texts.clear()  # NEW (review)
+    document_store._offer_texts.clear()  # NEW (review)
     yield
     profile_store._profiles.clear()
+    document_store._cv_texts.clear()  # NEW (review)
+    document_store._offer_texts.clear()  # NEW (review)
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +213,7 @@ def test_structure_profile_wraps_model_errors(monkeypatch):
         structure_profile("texto")
 
 
+# NEW (review): test for the quota error in the service
 def test_structure_profile_turns_rate_limit_into_quota_error(monkeypatch):
     error = ModelRateLimitError("429 RESOURCE_EXHAUSTED gemini-x quota")
     monkeypatch.setattr(cv_extraction, "_build_chain", lambda: FakeChain(error=error))
@@ -235,26 +236,26 @@ def test_build_chain_requires_model_name(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# POST /cv
+# NEW (review): POST /cv (step 1: validate, store the text, NO LLM call)
 # ---------------------------------------------------------------------------
-def test_upload_cv_returns_profile(monkeypatch):
-    monkeypatch.setattr("app.routers.cv.structure_profile", fake_profile)
+def test_upload_cv_stores_text_and_returns_length():
     response = post_cv(make_pdf("Python developer"))
     assert response.status_code == 200
-    body = response.json()["profile"]
-    assert body["skills"][0]["title"] == "Python"
-    assert body["experience"] == []
+    stored = document_store.get_cv_text(document_store.DEFAULT_USER)
+    assert "Python developer" in stored
+    assert response.json() == {"characters": len(stored)}
 
 
-def test_upload_cv_accepts_docx(monkeypatch):
-    monkeypatch.setattr("app.routers.cv.structure_profile", fake_profile)
+def test_upload_cv_accepts_docx():
     assert post_cv(make_docx(["Python developer"]), name="cv.docx").status_code == 200
 
 
-def test_upload_cv_does_not_store_anything(monkeypatch):
-    monkeypatch.setattr("app.routers.cv.structure_profile", fake_profile)
-    post_cv(make_pdf("Python developer"))
-    assert profile_store.get_profile(profile_store.DEFAULT_USER) is None
+def test_upload_cv_does_not_call_the_model(monkeypatch):
+    def forbidden():
+        raise AssertionError("the LLM must not be called in step 1")
+
+    monkeypatch.setattr(cv_extraction, "_build_chain", forbidden)
+    assert post_cv(make_pdf("Python developer")).status_code == 200
 
 
 def test_upload_cv_without_file_returns_422():
@@ -263,51 +264,33 @@ def test_upload_cv_without_file_returns_422():
 
 def test_upload_cv_rejects_unsupported_file():
     assert post_cv(b"esto no es un cv").status_code == 415
+    assert document_store.get_cv_text(document_store.DEFAULT_USER) is None
 
 
 def test_upload_cv_rejects_file_without_text():
     assert post_cv(make_pdf("")).status_code == 422
+    assert document_store.get_cv_text(document_store.DEFAULT_USER) is None
 
 
 def test_upload_cv_rejects_oversized_file():
     assert post_cv(b"%PDF" + b"0" * (5 * 1024 * 1024)).status_code == 413
 
 
-def test_upload_cv_returns_502_when_model_fails(monkeypatch):
-    def failing(_text):
-        raise ExtractionError("No se pudo extraer el perfil del CV.")
-
-    monkeypatch.setattr("app.routers.cv.structure_profile", failing)
-    assert post_cv(make_pdf("Python developer")).status_code == 502
-
-
-def test_upload_cv_returns_503_when_quota_exhausted(monkeypatch):
-    def exhausted(_text):
-        raise ModelQuotaError("El servicio ha alcanzado su límite de uso.")
-
-    monkeypatch.setattr("app.routers.cv.structure_profile", exhausted)
-    response = post_cv(make_pdf("Python developer"))
-    assert response.status_code == 503
-    assert "límite de uso" in response.json()["detail"]
+def test_upload_cv_replaces_previous_cv():
+    post_cv(make_pdf("Primero"))
+    post_cv(make_pdf("Segundo"))
+    assert "Segundo" in document_store.get_cv_text(document_store.DEFAULT_USER)
 
 
 # ---------------------------------------------------------------------------
-# POST /cv/confirm and DELETE /profile
+# NEW (review): DELETE /profile (now also removes the raw texts)
 # ---------------------------------------------------------------------------
-def test_confirm_profile_stores_and_returns_204():
-    payload = {"profile": {"skills": [{"title": "Python"}]}}
-    response = client.post("/cv/confirm", json=payload)
-    assert response.status_code == 204
-    assert profile_store.get_profile(profile_store.DEFAULT_USER).skills[0].title == "Python"
-
-
-def test_confirm_profile_rejects_invalid_entry():
-    response = client.post("/cv/confirm", json={"profile": {"skills": [{"title": ""}]}})
-    assert response.status_code == 422
-    assert profile_store.get_profile(profile_store.DEFAULT_USER) is None
-
-
-def test_delete_profile_removes_data():
-    client.post("/cv/confirm", json={"profile": {"skills": [{"title": "Python"}]}})
+def test_delete_profile_removes_everything():
+    post_cv(make_pdf("Python developer"))
+    client.post("/offer", json={"offer": "Buscamos desarrollador Python"})
+    profile_store.save_profile(profile_store.DEFAULT_USER, Profile())
     assert client.delete("/profile").status_code == 204
-    assert profile_store.get_profile(profile_store.DEFAULT_USER) is None
+    user = document_store.DEFAULT_USER
+    assert document_store.get_cv_text(user) is None
+    assert document_store.get_offer_text(user) is None
+    assert profile_store.get_profile(user) is None
