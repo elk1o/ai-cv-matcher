@@ -12,6 +12,11 @@ app = FastAPI(title="CV Matcher")
 def health():
     return {"status": "ok"}
 
+# @app.get("/health/model")
+# def modeltest():
+#     from langchain_google_genai import ChatGoogleGenerativeAI
+#     return ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite").invoke("hola").content
+
 app.include_router(cv.router)
 app.include_router(offer.router)
 app.include_router(match.router)

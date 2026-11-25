@@ -5,22 +5,16 @@ import docx
 import pymupdf
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.exceptions import ModelRateLimitError  # NEW (review)
 
 from app.main import app
 from app.schemas import Profile
-from app.services import cv_extraction, document_store, profile_store  # NEW (review): document_store
+from app.services import cv_extraction, document_store, profile_store
 from app.services.cv_extraction import (
     MAX_TEXT_CHARS,
     EmptyCVError,
-    ExtractionError,
-    ModelQuotaError,  # NEW (review)
     UnsupportedFileError,
-    _EntryDraft,
-    _ProfileDraft,
     detect_kind,
     extract_text,
-    structure_profile,
 )
 
 client = TestClient(app)
@@ -60,12 +54,12 @@ def post_cv(content: bytes, name="cv.pdf"):
 @pytest.fixture(autouse=True)
 def clean_store():
     profile_store._profiles.clear()
-    document_store._cv_texts.clear()  # NEW (review)
-    document_store._offer_texts.clear()  # NEW (review)
+    document_store._cv_texts.clear()
+    document_store._offer_texts.clear()
     yield
     profile_store._profiles.clear()
-    document_store._cv_texts.clear()  # NEW (review)
-    document_store._offer_texts.clear()  # NEW (review)
+    document_store._cv_texts.clear()
+    document_store._offer_texts.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -153,89 +147,6 @@ def test_extract_text_rejects_zip_bomb(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# structure_profile (with a fake chain: no LLM is called)
-# ---------------------------------------------------------------------------
-class FakeChain:
-    def __init__(self, result=None, error=None):
-        self.result, self.error = result, error
-
-    def invoke(self, _inputs):
-        if self.error:
-            raise self.error
-        return self.result
-
-
-def make_draft(**sections) -> _ProfileDraft:
-    base = {name: [] for name in _ProfileDraft.model_fields}
-    base.update({k: [_EntryDraft(**e) for e in v] for k, v in sections.items()})
-    return _ProfileDraft(**base)
-
-
-def structure_with(monkeypatch, draft) -> Profile:
-    monkeypatch.setattr(cv_extraction, "_build_chain", lambda: FakeChain(result=draft))
-    return structure_profile("texto")
-
-
-def test_structure_profile_returns_profile(monkeypatch):
-    draft = make_draft(skills=[{"title": "Python", "detail": ""}])
-    assert structure_with(monkeypatch, draft).skills[0].title == "Python"
-
-
-def test_structure_profile_truncates_long_fields(monkeypatch):
-    draft = make_draft(skills=[{"title": "T" * 500, "detail": "D" * 5000}])
-    entry = structure_with(monkeypatch, draft).skills[0]
-    assert len(entry.title) == 200
-    assert len(entry.detail) == 2000
-
-
-def test_structure_profile_drops_entries_without_title(monkeypatch):
-    draft = make_draft(skills=[{"title": "   ", "detail": "x"}, {"title": "SQL", "detail": ""}])
-    skills = structure_with(monkeypatch, draft).skills
-    assert [e.title for e in skills] == ["SQL"]
-
-
-def test_structure_profile_caps_entries_per_section(monkeypatch):
-    draft = make_draft(skills=[{"title": f"skill {i}", "detail": ""} for i in range(80)])
-    assert len(structure_with(monkeypatch, draft).skills) == 50
-
-
-def test_draft_schema_has_no_limits():
-    # Gemini rejects schemas with nested limits: the one we send must have none.
-    schema = str(_ProfileDraft.model_json_schema())
-    for keyword in ("maxItems", "minItems", "maxLength", "minLength"):
-        assert keyword not in schema
-
-
-def test_structure_profile_wraps_model_errors(monkeypatch):
-    chain = FakeChain(error=TimeoutError("sin red"))
-    monkeypatch.setattr(cv_extraction, "_build_chain", lambda: chain)
-    with pytest.raises(ExtractionError):
-        structure_profile("texto")
-
-
-# NEW (review): test for the quota error in the service
-def test_structure_profile_turns_rate_limit_into_quota_error(monkeypatch):
-    error = ModelRateLimitError("429 RESOURCE_EXHAUSTED gemini-x quota")
-    monkeypatch.setattr(cv_extraction, "_build_chain", lambda: FakeChain(error=error))
-    with pytest.raises(ModelQuotaError) as info:
-        structure_profile("texto")
-    assert "RESOURCE_EXHAUSTED" not in str(info.value)  # provider details are not leaked
-    assert info.value.__cause__ is error
-
-
-def test_structure_profile_rejects_empty_model_output(monkeypatch):
-    monkeypatch.setattr(cv_extraction, "_build_chain", lambda: FakeChain(result=None))
-    with pytest.raises(ExtractionError):
-        structure_profile("texto")
-
-
-def test_build_chain_requires_model_name(monkeypatch):
-    monkeypatch.delenv("GEMINI_MODEL", raising=False)
-    with pytest.raises(RuntimeError, match="GEMINI_MODEL"):
-        cv_extraction._build_chain()
-
-
-# ---------------------------------------------------------------------------
 # NEW (review): POST /cv (step 1: validate, store the text, NO LLM call)
 # ---------------------------------------------------------------------------
 def test_upload_cv_stores_text_and_returns_length():
@@ -251,10 +162,10 @@ def test_upload_cv_accepts_docx():
 
 
 def test_upload_cv_does_not_call_the_model(monkeypatch):
-    def forbidden():
+    def forbidden(*_args, **_kwargs):
         raise AssertionError("the LLM must not be called in step 1")
 
-    monkeypatch.setattr(cv_extraction, "_build_chain", forbidden)
+    monkeypatch.setattr("app.graph.nodes._ask_llm_to_extract", forbidden)
     assert post_cv(make_pdf("Python developer")).status_code == 200
 
 

@@ -35,5 +35,14 @@ class OfferResponse(BaseModel):
     score: int = Field(ge=0, le=100)
     requirements: list[OfferRequirement]
 
+class Requirement(BaseModel):
+    """A requirement extracted from the job offer (before it is compared with the profile)."""
+    text: str = Field(min_length=1, max_length=300)
+    mandatory: bool
+
 class UploadResponse(BaseModel):
     characters: int
+
+class MatchInitialResponse(BaseModel):
+    thread_id: str
+    profile: Profile

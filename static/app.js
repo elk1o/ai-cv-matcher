@@ -10,6 +10,7 @@ const LIMITS = {
   offerMax: 8000,
   entriesPerSection: 50,
   fileBytes: 5 * 1024 * 1024,
+  cvChars: 30_000, // el backend recorta el texto del CV a este máximo (MAX_TEXT_CHARS)
 };
 
 // Oferta ficticia para probar el flujo sin buscar una real.
@@ -49,6 +50,7 @@ const STATUS = {
 let profile = null;     // perfil en revisión (se usará en el paso 3, cuando el grafo pida revisión humana)
 let editing = null;     // { section, index } ; index === null => entrada nueva
 let busy = false;
+let threadId = null;    // identificador de la ejecución del grafo (lo devuelve POST /match)
 
 // ---------------------------------------------------------------------------
 // Utilidades DOM (todo el contenido dinámico se pinta como texto, nunca HTML)
@@ -87,7 +89,10 @@ function setBusy(value) {
   document.body.style.cursor = value ? "progress" : "";
   updateUploadButton();
   updateOfferButton();
-  $("start-btn").disabled = value;
+  // El botón de inicio queda bloqueado mientras haya una ejecución en marcha o esperando revisión.
+  $("start-btn").disabled = value || threadId !== null;
+  $("cancel-review-btn").disabled = value;
+  $("confirm-btn").disabled = value || editing !== null || !profile || totalEntries() === 0;
   $("back-cv-btn").disabled = value;
   $("back-offer-btn").disabled = value;
   $("delete-btn").disabled = value;
@@ -104,12 +109,20 @@ function setBusy(value) {
 // Los mensajes dependen del tiempo transcurrido: el servidor no informa del progreso
 // real, así que no se muestra ningún porcentaje (sería inventado).
 const LOADING_STEPS = {
+  // POST /match: el grafo extrae el perfil y se detiene a pedir revisión.
   match: [
     [0, "Leyendo tu CV y la oferta…"],
-    [15, "Extrayendo tu perfil y los requisitos…"],
-    [30, "Comparando tu perfil con cada requisito…"],
-    [60, "Casi listo. Puede tardar hasta un minuto…"],
-    [120, "Está tardando más de lo habitual. Sigue en marcha…"],
+    [8, "Extrayendo tu perfil…"],
+    [30, "Casi listo. Puede tardar hasta un minuto…"],
+    [60, "Está tardando más de lo habitual. Sigue en marcha…"],
+  ],
+  // POST /match/{thread_id}/resume: el grafo continúa con el perfil confirmado.
+  resume: [
+    [0, "Preparando la comparación…"],
+    [8, "Comparando tu perfil con cada requisito…"],
+    [30, "Verificando las evidencias…"],
+    [55, "Casi listo. Puede tardar hasta un minuto…"],
+    [80, "Está tardando más de lo habitual. Sigue en marcha…"],
   ],
 };
 
@@ -145,6 +158,13 @@ function startLoading(container, steps) {
 // ---------------------------------------------------------------------------
 const SLOW_TIMEOUT_MS = 120_000; // análisis del paso 3 (el grafo llama varias veces al LLM)
 
+// Error con el código HTTP, para poder reaccionar a casos concretos (por ejemplo, 404 al reanudar).
+function httpError(message, status) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
 async function request(path, options = {}) {
   const { timeoutMs = 30_000, ...fetchOptions } = options;
   const controller = new AbortController();
@@ -171,14 +191,14 @@ async function request(path, options = {}) {
     }
     // Los errores propios del backend (413, 415, 422, 502...) traen un mensaje en español.
     // En un 500 no se muestra el detalle interno.
-    if (typeof detail === "string" && res.status !== 500) throw new Error(detail);
+    if (typeof detail === "string" && res.status !== 500) throw httpError(detail, res.status);
 
     let msg = `Error ${res.status}.`;
     if (res.status === 401) msg = "Código de acceso inválido.";
     else if (res.status === 422) msg = "Los datos enviados no son válidos. Revisa los límites de longitud.";
     else if (res.status === 429) msg = "Has alcanzado el límite diario de análisis.";
     else if (res.status >= 500) msg = "Error del servidor. Inténtalo de nuevo en un momento.";
-    throw new Error(msg);
+    throw httpError(msg, res.status);
   }
   return res.status === 204 ? null : res.json();
 }
@@ -201,9 +221,20 @@ const api = {
     });
   },
 
-  // Paso 3: lanza el grafo con el CV y la oferta ya guardados.
+  // Paso 3a: lanza el grafo con el CV y la oferta ya guardados.
+  // Responde { thread_id, profile }: el grafo se detiene a la espera de la revisión.
   async startMatch() {
     return request("/match", { method: "POST", timeoutMs: SLOW_TIMEOUT_MS });
+  },
+
+  // Paso 3b: reanuda el grafo con el perfil confirmado. Responde { score, requirements }.
+  async resumeMatch(id, p) {
+    return request(`/match/${encodeURIComponent(id)}/resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: p }),
+      timeoutMs: SLOW_TIMEOUT_MS,
+    });
   },
 
   // Borra el CV, la oferta y el perfil del usuario.
@@ -297,7 +328,12 @@ async function onUploadSubmit(event) {
   try {
     const data = await api.uploadCv(file);
     showStep(2);
-    showMessage(`CV cargado (${data.characters} caracteres de texto).`);
+    let text = `CV cargado (${data.characters} caracteres de texto).`;
+    // Si llega justo al máximo, casi seguro que el CV era más largo y se ha recortado.
+    if (data.characters >= LIMITS.cvChars) {
+      text += ` Se ha recortado a ${LIMITS.cvChars.toLocaleString("es-ES")} caracteres.`;
+    }
+    showMessage(text);
   } catch (err) {
     showMessage(err.message, true);
   } finally {
@@ -318,8 +354,7 @@ function normalizeProfile(p) {
 }
 
 // ---------------------------------------------------------------------------
-// Revisión humana (HITL): editar, añadir y quitar
-// Todavía no está conectada: la usará el paso 3 cuando el grafo se detenga a pedir revisión.
+// Revisión humana (HITL): editar, añadir y quitar (paso 3, cuando el grafo se detiene a pedir revisión)
 // ---------------------------------------------------------------------------
 function totalEntries() {
   return SECTIONS.reduce((sum, [key]) => sum + profile[key].length, 0);
@@ -456,6 +491,7 @@ function renderReview() {
     : total === 0
       ? "El perfil está vacío. Añade al menos una entrada para continuar."
       : `${total} entradas en total.`;
+  $("confirm-btn").disabled = busy || editing !== null || total === 0;
 
   const firstInput = container.querySelector(".entry-form input");
   if (firstInput) firstInput.focus();
@@ -499,9 +535,10 @@ async function onOfferSubmit(event) {
   setBusy(true);
   $("offer-btn").textContent = "Guardando…";
   try {
-    await api.uploadOffer(offer);
+    const data = await api.uploadOffer(offer);
     resetStep3();
     showStep(3);
+    showMessage(`Oferta cargada (${data.characters} caracteres de texto).`);
   } catch (err) {
     showMessage(err.message, true);
   } finally {
@@ -515,22 +552,32 @@ async function onOfferSubmit(event) {
 // ---------------------------------------------------------------------------
 // Estado inicial del paso 3: botón de inicio visible, sin revisión ni resultado.
 function resetStep3() {
+  threadId = null;
+  profile = null;
+  editing = null;
   $("start-phase").hidden = false;
+  $("start-btn").disabled = busy; // sin ejecución pendiente, el botón vuelve a estar disponible
   $("review-phase").hidden = true;
   $("result").hidden = true;
 }
 
+// Paso 3a: el grafo extrae el perfil y se detiene; mostramos el perfil para revisarlo.
 async function onStartMatch() {
-  if (busy) return;
+  // Un solo análisis a la vez: se ignora si ya hay uno en curso o pendiente de revisión.
+  if (busy || threadId !== null) return;
+  $("start-btn").disabled = true; // se bloquea en el mismo instante de la pulsación
   clearMessage();
   setBusy(true);
   $("start-btn").textContent = "Analizando…";
   const stopLoading = startLoading($("match-loading"), LOADING_STEPS.match);
   try {
-    const result = await api.startMatch();
-    renderResult(result);
+    const data = await api.startMatch();
+    threadId = data.thread_id;
+    profile = normalizeProfile(data.profile);
+    editing = null;
     $("start-phase").hidden = true;
-    $("result").hidden = false;
+    $("review-phase").hidden = false;
+    renderReview();
   } catch (err) {
     showMessage(err.message, true);
   } finally {
@@ -538,6 +585,44 @@ async function onStartMatch() {
     $("start-btn").textContent = "Iniciar análisis";
     setBusy(false);
   }
+}
+
+// Paso 3b: enviamos el perfil confirmado (o editado) y el grafo continúa hasta el resultado.
+async function onConfirm() {
+  if (busy || editing !== null || !profile || !threadId || totalEntries() === 0) return;
+  $("confirm-btn").disabled = true; // se bloquea en el mismo instante de la pulsación
+  clearMessage();
+  setBusy(true);
+  $("confirm-btn").textContent = "Analizando…";
+  const stopLoading = startLoading($("resume-loading"), LOADING_STEPS.resume);
+  try {
+    const result = await api.resumeMatch(threadId, profile);
+    renderResult(result);
+    $("review-phase").hidden = true;
+    $("result").hidden = false;
+    threadId = null; // la ejecución ha terminado
+    profile = null;  // sin perfil, "Confirmar" queda bloqueado hasta la próxima revisión
+  } catch (err) {
+    if (err.status === 404 || err.status === 409) {
+      // La ejecución ya no existe (por ejemplo, el servidor se reinició): hay que empezar de nuevo.
+      resetStep3();
+      showMessage("La revisión ha caducado. Vuelve a iniciar el análisis.", true);
+    } else {
+      showMessage(err.message, true);
+    }
+  } finally {
+    stopLoading();
+    $("confirm-btn").textContent = "Confirmar y analizar";
+    setBusy(false);
+    if (!$("review-phase").hidden) renderReview();
+  }
+}
+
+// Descarta la revisión y vuelve al botón de inicio.
+function onCancelReview() {
+  if (busy) return;
+  clearMessage();
+  resetStep3();
 }
 
 function renderResult(result) {
@@ -622,6 +707,8 @@ function init() {
   $("back-cv-btn").addEventListener("click", onBackToCv);
   $("back-offer-btn").addEventListener("click", onBackToOffer);
   $("start-btn").addEventListener("click", onStartMatch);
+  $("confirm-btn").addEventListener("click", onConfirm);
+  $("cancel-review-btn").addEventListener("click", onCancelReview);
   $("another-btn").addEventListener("click", onAnotherOffer);
   $("delete-btn").addEventListener("click", onDelete);
   updateUploadButton();
