@@ -9,6 +9,9 @@ from app.schemas import (
     OfferRequest,
     OfferRequirement,
     OfferResponse,
+    Requirement,  # NEW (review)
+    UploadResponse,  # NEW (review)
+    MatchInitialResponse,  # NEW (review)
 )
 
 ###############################
@@ -160,7 +163,7 @@ def test_profile_confirm_request_rejects_invalid_nested_entry(title, valid):
 
 @pytest.mark.parametrize(
     "offer, valid",
-    [("a"*9, False), ("a"*10, True), ("a"*8000, True), ("a"*8001, False), (""*5, False)],
+    [("a"*9, False), ("a"*10, True), ("a"*8000, True), ("a"*8001, False), (" " * 5, False)],
 )
 def test_offer_request_length_limits(offer, valid):
     print(f"Offer length: {len(offer)} Valid: {valid}")
@@ -182,7 +185,7 @@ def test_offer_request_rejects_whitespace_only_offer():
 def test_offer_requirement_rejects_invalid_status(status):
     print(f"Offer requirement status: {status}")
     with pytest.raises(ValidationError, match='status'):
-        OfferRequirement(status=status)
+        OfferRequirement(text="x", status=status)  # NEW (review): text added so only status can fail
 
 @pytest.mark.parametrize("status", ["OK", "Partial", "KO"])
 def test_offer_requirement_accepts_valid_statuses(status):
@@ -220,3 +223,46 @@ def test_offer_response_rejects_invalid_requirement_status():
     }
     with pytest.raises(ValidationError, match="status"):
         OfferResponse(**data)
+
+###############################
+# Requirement (extracted from the offer)  # NEW (review)
+###############################
+
+@pytest.mark.parametrize("length, valid", [(0, False), (1, True), (300, True), (301, False)])
+def test_requirement_text_length_limits(length, valid):
+    if valid:
+        assert len(Requirement(text="a" * length, mandatory=True).text) == length
+    else:
+        with pytest.raises(ValidationError, match="text"):
+            Requirement(text="a" * length, mandatory=True)
+
+def test_requirement_mandatory_is_required():
+    with pytest.raises(ValidationError, match="mandatory"):
+        Requirement(text="Python")
+
+###############################
+# UploadResponse (POST /cv and POST /offer)  # NEW (review)
+###############################
+
+def test_upload_response_requires_characters():
+    assert UploadResponse(characters=10).characters == 10
+    with pytest.raises(ValidationError, match="characters"):
+        UploadResponse()
+
+###############################
+# MatchInitialResponse (POST /match)  # NEW (review)
+###############################
+
+def test_match_initial_response_builds_from_nested_dict():
+    response = MatchInitialResponse(thread_id="t1", profile={"skills": [{"title": "Python"}]})
+    assert response.thread_id == "t1"
+    assert isinstance(response.profile, Profile)
+    assert response.profile.skills[0].title == "Python"
+
+def test_match_initial_response_requires_thread_id():
+    with pytest.raises(ValidationError, match="thread_id"):
+        MatchInitialResponse(profile=Profile())
+
+def test_match_initial_response_rejects_invalid_nested_entry():
+    with pytest.raises(ValidationError, match="title"):
+        MatchInitialResponse(thread_id="t1", profile={"skills": [{"title": ""}]})

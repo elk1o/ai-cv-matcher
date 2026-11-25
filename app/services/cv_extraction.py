@@ -4,71 +4,27 @@ This layer does not import anything from FastAPI: it raises its own exceptions a
 router is the one that translates them into HTTP status codes.
 """
 import io
-import logging
-import os
 import zipfile
 
 import docx
 import pymupdf
 from docx.table import Table
 from docx.text.paragraph import Paragraph
-from langchain_core.exceptions import ModelRateLimitError
-from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel
 
-from app.schemas import Profile
-from app.prompts import CV_EXTRACTION_SYSTEM_PROMPT
-
-logger = logging.getLogger(__name__)
-
-MAX_TEXT_CHARS = 30_000                      # max text length sent to the LLM
 MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024    # max uncompressed DOCX size (anti zip bomb)
-
-# LLM call settings. langchain-google-genai retries up to 6 times by default, and every retry
-# is another request against the quota, so keep it low.
-LLM_MAX_RETRIES = 1
-LLM_TIMEOUT_SECONDS = 90
-
-# Limits of Profile (app/schemas.py). Keep in sync: if they change there, change them here.
-MAX_TITLE_CHARS = 200
-MAX_DETAIL_CHARS = 2000
-MAX_ENTRIES_PER_SECTION = 50
+MAX_TEXT_CHARS = 30_000 # max text length sent to the LLM
 
 PDF_MAGIC = b"%PDF"
 ZIP_MAGIC = b"PK\x03\x04"
 OLE_MAGIC = b"\xd0\xcf\x11\xe0" # Word 97-2003 (.doc)
 
-QUOTA_MESSAGE = "El servicio ha alcanzado su límite de uso. Inténtalo de nuevo más tarde."
 DOC_MESSAGE = "Los archivos .doc (Word antiguo) no se admiten. Guárdalo como DOCX o PDF."
-
-class _EntryDraft(BaseModel):
-    """Entry as returned by the LLM. No limits: Gemini rejects schemas with many nested
-    limits ("too many states for serving")."""
-
-    title: str
-    detail: str
-
-class _ProfileDraft(BaseModel):
-    """Schema sent to the LLM. The limits are applied afterwards, in _to_profile."""
-
-    experience: list[_EntryDraft]
-    education: list[_EntryDraft]
-    courses: list[_EntryDraft]
-    skills: list[_EntryDraft]
-    languages: list[_EntryDraft]
-    achievements: list[_EntryDraft]
 
 class UnsupportedFileError(Exception):
     """The file is not a valid PDF or DOCX."""
 
 class EmptyCVError(Exception):
     """The file has no extractable text (for example, a scanned PDF)."""
-
-class ModelQuotaError(Exception):
-    """The model provider's quota or rate limit is exhausted (not the user's fault)."""
-
-class ExtractionError(Exception):
-    """The model did not return a valid profile."""
 
 # ---------------------------------------------------------------------------
 # 1. Detect the file type from its content (not from its name)
@@ -154,57 +110,3 @@ def extract_text(data: bytes) -> str:
     if not text:
         raise EmptyCVError("El archivo no contiene texto.")
     return text[:MAX_TEXT_CHARS]
-
-
-# ---------------------------------------------------------------------------
-# 3. Structure the text into a Profile with the LLM
-# ---------------------------------------------------------------------------
-def _build_chain():
-    # Lazy import: faster startup, and the tests do not need the Google SDK.
-    from langchain_google_genai import ChatGoogleGenerativeAI
-
-    model = os.environ.get("GEMINI_MODEL")
-    if not model:
-        raise RuntimeError("Falta la variable de entorno GEMINI_MODEL.")
-
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", CV_EXTRACTION_SYSTEM_PROMPT), ("human", "<cv>\n{cv_text}\n</cv>")]
-    )
-    llm = ChatGoogleGenerativeAI(model=model, max_retries=LLM_MAX_RETRIES, timeout=LLM_TIMEOUT_SECONDS)
-    return prompt | llm.with_structured_output(_ProfileDraft)
-
-
-def _clean_entries(entries: list[_EntryDraft]) -> list[dict]:
-    cleaned = []
-    for entry in entries:
-        title = entry.title.strip()[:MAX_TITLE_CHARS].strip()
-        if not title:  # an entry without a title is useless
-            continue
-        cleaned.append({"title": title, "detail": entry.detail.strip()[:MAX_DETAIL_CHARS]})
-    return cleaned[:MAX_ENTRIES_PER_SECTION]
-
-
-def _to_profile(draft: _ProfileDraft) -> Profile:
-    """Apply the limits to the LLM draft and validate it as a Profile.
-
-    Fields are truncated instead of rejected: a 201-character title does not justify a 502.
-    """
-    data = {name: _clean_entries(getattr(draft, name)) for name in _ProfileDraft.model_fields}
-    return Profile.model_validate(data)
-
-
-def structure_profile(text: str) -> Profile:
-    chain = _build_chain()
-    try:
-        result = chain.invoke({"cv_text": text})
-        draft = _ProfileDraft.model_validate(result)
-        return _to_profile(draft)
-    except ModelRateLimitError as exc:
-        # Must go before `except Exception`: Python uses the first clause that matches.
-        # The provider message (model, project, quota URLs) is logged, never sent to the user.
-        logger.warning("Model quota exceeded: %s", type(exc).__name__)
-        raise ModelQuotaError(QUOTA_MESSAGE) from exc
-    except Exception as exc:
-        # Invalid output, network or quota failure...
-        # The CV text is deliberately left out of the message (personal data).
-        raise ExtractionError("No se pudo extraer el perfil del CV.") from exc

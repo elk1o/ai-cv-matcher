@@ -30,6 +30,7 @@
         <label class="field-label" for="cv-file">Archivo (PDF o DOCX, máximo 5 MB)</label>
         <input id="cv-file" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
         <p id="file-error" class="field-error" hidden></p>
+        <p class="hint">Se usan como máximo 30.000 caracteres de texto del CV: si es más largo, se recortará a 30.000.</p>
 
         <label class="check">
           <input id="consent" type="checkbox">
@@ -68,12 +69,16 @@
         <div id="match-loading" class="loading" role="status" hidden></div>
       </div>
 
-      <!-- Revisión humana (HITL). Todavía no está conectada: se usará cuando el grafo se detenga
-           para que el usuario corrija el perfil y los requisitos. renderReview() ya existe en app.js. -->
+      <!-- Revisión humana (HITL): el grafo se detiene tras extraer el perfil y espera tu confirmación. -->
       <div id="review-phase" hidden>
-        <p class="hint">Revisa lo que se ha extraído. Puedes editar, quitar o añadir entradas.</p>
+        <p class="hint">Revisa lo que se ha extraído de tu CV. Puedes editar, quitar o añadir entradas. El análisis continuará con lo que confirmes.</p>
         <div id="review-sections"></div>
         <p id="review-summary" class="hint"></p>
+        <div class="actions">
+          <button id="cancel-review-btn" class="btn" type="button">Cancelar</button>
+          <button id="confirm-btn" class="btn primary" type="button">Confirmar y analizar</button>
+        </div>
+        <div id="resume-loading" class="loading" role="status" hidden></div>
       </div>
 
       <div id="result" hidden>
